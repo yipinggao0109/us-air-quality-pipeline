@@ -257,162 +257,79 @@ def prepare_dataframe_for_db(df):
 
 def save_dataframe_to_db(df, table_name='sensor_data', if_exists='append'):
     """
-    Save a pandas DataFrame to PostgreSQL database.
-    Uses batch insert with ON CONFLICT to handle duplicates efficiently.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        DataFrame to save
-    table_name : str
-        Name of the table to save to (default: 'sensor_data')
-    if_exists : str
-        How to behave if table exists (default: 'append')
-    
-    Returns:
-    --------
-    dict
-        Summary with 'attempted', 'status' counts
+    Save a pandas DataFrame to PostgreSQL (Supabase) using a single
+    bulk INSERT ... ON CONFLICT DO NOTHING.
+
+    - New rows are inserted.
+    - Rows that would violate the unique constraint are skipped.
+    - Duplicates *within* df are removed before sending to DB.
+
+    Returns
+    -------
+    dict: {attempted, inserted, duplicates}
     """
     if df.empty:
         print("⚠ DataFrame is empty, nothing to insert")
-        return {'attempted': 0, 'status': 'empty'}
-    
-    # Prepare the dataframe
+        return {'attempted': 0, 'inserted': 0, 'duplicates': 0}
+
+    # Clean + enforce types once, vectorized
     df_clean = prepare_dataframe_for_db(df)
-    
+
+    # Drop exact duplicates on the key used for ON CONFLICT
+    key_cols = ['sensor_id', 'parameter', 'datetime_utc']
+    for c in key_cols:
+        if c not in df_clean.columns:
+            raise ValueError(f"Missing key column '{c}' in DataFrame")
+    df_clean = df_clean.drop_duplicates(subset=key_cols)
+
+    # Only keep columns we actually insert, in the right order
+    cols = [
+        'sensor_id', 'parameter', 'datetime_utc', 'datetime_local',
+        'value', 'units', 'coverage_percent', 'min', 'max', 'median'
+    ]
+    missing = [c for c in cols if c not in df_clean.columns]
+    if missing:
+        raise ValueError(f"Missing columns for insert: {missing}")
+
+    # Fast conversion to list-of-dicts (no iterrows)
+    records = df_clean[cols].to_dict(orient='records')
+
+    if not records:
+        print("⚠ After de-duplication, nothing to insert")
+        return {'attempted': 0, 'inserted': 0, 'duplicates': 0}
+
     engine = get_db_engine()
-    
+
     try:
-        # Count existing records before insert
-        from sqlalchemy import text
-        with engine.connect() as conn:
-            count_before = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).fetchone()[0]
-        
-        # Use pandas to_sql with special handling
-        # This will fail on duplicates, but we'll catch it
-        try:
-            df_clean.to_sql(
-                table_name,
-                engine,
-                if_exists='append',
-                index=False,
-                method='multi',
-                chunksize=1000
-            )
-            
-            # Count after insert
-            with engine.connect() as conn:
-                count_after = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).fetchone()[0]
-            
-            inserted = count_after - count_before
-            print(f"✓ Inserted {inserted} rows into {table_name}")
-            return {'attempted': len(df_clean), 'inserted': inserted, 'duplicates': len(df_clean) - inserted}
-            
-        except Exception as e:
-            if 'duplicate key' in str(e).lower() or 'unique constraint' in str(e).lower():
-                print(f"⚠ Some duplicates detected, using conflict resolution...")
-                
-                # Use raw SQL with ON CONFLICT
-                with engine.begin() as conn:
-                    # Get count before
-                    count_before = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).fetchone()[0]
-                    
-                    # Prepare values for batch insert
-                    values = []
-                    for _, row in df_clean.iterrows():
-                        values.append({
-                            'sensor_id': int(row['sensor_id']),
-                            'parameter': str(row['parameter']),
-                            'datetime_utc': row['datetime_utc'],
-                            'datetime_local': row['datetime_local'],
-                            'value': float(row['value']) if pd.notna(row['value']) else None,
-                            'units': str(row['units']),
-                            'coverage_percent': float(row['coverage_percent']) if pd.notna(row['coverage_percent']) else None,
-                            'min': float(row['min']) if pd.notna(row['min']) else None,
-                            'max': float(row['max']) if pd.notna(row['max']) else None,
-                            'median': float(row['median']) if pd.notna(row['median']) else None
-                        })
-                    
-                    # Batch insert with ON CONFLICT
-                    insert_stmt = text("""
-                        INSERT INTO sensor_data 
-                        (sensor_id, parameter, datetime_utc, datetime_local, value, units, 
-                         coverage_percent, min, max, median)
-                        VALUES 
-                        (:sensor_id, :parameter, :datetime_utc, :datetime_local, :value, :units,
-                         :coverage_percent, :min, :max, :median)
-                        ON CONFLICT (sensor_id, parameter, datetime_utc) DO NOTHING
-                    """)
-                    
-                    conn.execute(insert_stmt, values)
-                    
-                    # Get count after
-                    count_after = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).fetchone()[0]
-                
-                inserted = count_after - count_before
-                duplicates = len(df_clean) - inserted
-                print(f"✓ Inserted {inserted} new rows, skipped {duplicates} duplicates")
-                return {'attempted': len(df_clean), 'inserted': inserted, 'duplicates': duplicates}
-            else:
-                raise
-                
+        insert_sql = f"""
+            INSERT INTO {table_name}
+            (sensor_id, parameter, datetime_utc, datetime_local, value, units,
+             coverage_percent, min, max, median)
+            VALUES
+            (:sensor_id, :parameter, :datetime_utc, :datetime_local, :value, :units,
+             :coverage_percent, :min, :max, :median)
+            ON CONFLICT (sensor_id, parameter, datetime_utc) DO NOTHING
+        """
+
+        with engine.begin() as conn:
+            result = conn.execute(text(insert_sql), records)
+            inserted = result.rowcount   # rows actually inserted
+
+        attempted = len(records)
+        duplicates = attempted - inserted
+        print(f"✓ Inserted {inserted} new rows, skipped {duplicates} duplicates")
+
+        return {
+            'attempted': attempted,
+            'inserted': inserted,
+            'duplicates': duplicates
+        }
+
     except Exception as e:
         print(f"✗ Error saving to database: {e}")
         raise
     finally:
         engine.dispose()
-    
-
-
-def fetch_and_save_sensor_data(client, sensor_ids, datetime_from, datetime_to, table_name='sensor_data'):
-    """
-    Fetch data for multiple sensors from OpenAQ API and save to PostgreSQL database.
-    
-    Parameters:
-    -----------
-    client : OpenAQ
-        OpenAQ client instance with API key
-    sensor_ids : list
-        List of sensor IDs to fetch data for
-    datetime_from : str
-        Start date in format 'MM/DD/YYYY' or other parseable formats
-    datetime_to : str
-        End date in format 'MM/DD/YYYY' or other parseable formats
-    table_name : str
-        Name of database table to save to (default: 'sensor_data')
-    
-    Returns:
-    --------
-    dict
-        Summary with 'successful', 'failed', 'total', and 'total_rows' counts
-    """
-    successful = 0
-    failed = 0
-    total_rows = 0
-    
-    for idx, sensor_id in enumerate(sensor_ids, 1):
-        print(f"\n[{idx}/{len(sensor_ids)}] Processing sensor {sensor_id}")
-        print("=" * 70)
-        
-        try:
-            # Fetch data from API
-            df = get_sensor_data(client, sensor_id, datetime_from=datetime_from, datetime_to=datetime_to)
-            
-            if not df.empty:
-                # Save to database
-                rows_inserted = save_dataframe_to_db(df, table_name=table_name, if_exists='append')
-                total_rows += rows_inserted
-                successful += 1
-            else:
-                print(f"⚠ No data for sensor {sensor_id}")
-                failed += 1
-                
-        except Exception as e:
-            print(f"✗ Error processing sensor {sensor_id}: {e}")
-            failed += 1
-    
-    # Print summary
 
 def fetch_and_save_sensor_data(client, sensor_ids, datetime_from, datetime_to, table_name='sensor_data'):
     """
