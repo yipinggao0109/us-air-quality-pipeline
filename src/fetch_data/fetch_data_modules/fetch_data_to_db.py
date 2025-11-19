@@ -5,29 +5,81 @@ from dotenv import load_dotenv
 from dateutil import parser 
 from datetime import datetime
 from sqlalchemy import create_engine, text
+from pathlib import Path
+
 
 # Load environment variables
 load_dotenv()
 
+def db_table_exists(table_name: str = "sensor_data") -> bool:
+    """
+    Check if a given table exists in the current database.
+    """
+    engine = get_db_engine()
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT EXISTS (
+                      SELECT 1
+                      FROM information_schema.tables
+                      WHERE table_schema = 'public'
+                        AND table_name = :table_name
+                    );
+                """),
+                {"table_name": table_name},
+            )
+            return result.scalar()
+    finally:
+        engine.dispose()
+
+
+def initialize_db(sql_path: str = "init_db/01_create_tables.sql", table_name: str = "sensor_data"):
+    """
+    Ensure the DB schema is created. If the main table doesn't exist,
+    run the SQL in `sql_path` against Supabase.
+    """
+    if db_table_exists(table_name):
+        print(f"Table {table_name} already exists – skipping init.")
+        return
+
+    sql_file = Path(sql_path)
+    if not sql_file.exists():
+        raise FileNotFoundError(f"Init SQL file not found: {sql_path}")
+
+    sql = sql_file.read_text()
+
+    engine = get_db_engine()
+    try:
+        with engine.begin() as conn:
+            # exec_driver_sql lets you run multi-statement SQL from a file
+            conn.exec_driver_sql(sql)
+        print(f"Initialized database using {sql_path}")
+    finally:
+        engine.dispose()
+
+
 def get_db_engine():
     """
-    Create and return a SQLAlchemy engine for PostgreSQL connection.
-    
-    Returns:
-    --------
-    sqlalchemy.engine.Engine
-        Database engine for connecting to PostgreSQL
+    Create and return a SQLAlchemy engine for PostgreSQL (Supabase) connection.
     """
     user = os.getenv('POSTGRES_USER')
     password = os.getenv('POSTGRES_PASSWORD')
     host = os.getenv('POSTGRES_HOST', 'localhost')
     port = os.getenv('POSTGRES_PORT', '5432')
     database = os.getenv('POSTGRES_DB')
-    
-    connection_string = f'postgresql://{user}:{password}@{host}:{port}/{database}'
-    engine = create_engine(connection_string)
-    return engine
 
+    if not all([user, password, host, port, database]):
+        raise RuntimeError("Database env vars not fully set (POSTGRES_*)")
+
+    # Supabase requires SSL
+    connection_string = (
+        f"postgresql+psycopg2://{user}:{password}"
+        f"@{host}:{port}/{database}?sslmode=require"
+    )
+
+    engine = create_engine(connection_string, pool_pre_ping=True)
+    return engine
 
 def parse_date_to_openaq_format(date_input):
     """

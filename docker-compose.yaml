@@ -46,3 +46,21 @@ services:
       bash -c "
         airflow scheduler
       "
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin_airquality
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@airquality.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+    ports:
+      - "5050:80"
+    volumes:
+      - ./pgadmin/servers.json:/pgadmin4/servers.json
+      - pgadmin_data:/var/lib/pgadmin
+
+volumes:
+  postgres_data: {}
+  pgadmin_data: {}
