@@ -63,3 +63,10 @@ Thumbs.db
 ###############
 # Local metadata
 *.log
+
+
+###############
+# DATA
+###############
+fetched_data/
+
