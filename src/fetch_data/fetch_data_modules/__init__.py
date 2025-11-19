@@ -8,5 +8,6 @@ from .fetch_data_to_db import (
     fetch_and_save_sensor_data as fetch_and_save_to_db,
     test_db_connection,
     initialize_db,
-    db_table_exists
+    db_table_exists,
+    get_utc_date_today
 )

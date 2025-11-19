@@ -3,13 +3,20 @@ import pandas as pd
 import os
 from dotenv import load_dotenv
 from dateutil import parser 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import create_engine, text
 from pathlib import Path
 
-
 # Load environment variables
 load_dotenv()
+
+def get_utc_date_today():
+    """
+    Returns today's date in UTC as a timezone-aware datetime.date object.
+    """
+    utc_now = datetime.now(timezone.utc)
+    return utc_now.date()
+
 
 def db_table_exists(table_name: str = "sensor_data") -> bool:
     """
