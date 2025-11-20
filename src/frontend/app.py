@@ -43,26 +43,16 @@ def inject_custom_styles():
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
-        /* Dark mode colors (default) */
-        :root {
-            --bg-primary: #0E1117;
-            --bg-secondary: #262730;
-            --bg-card: #1E1E2E;
-            --text-primary: #FAFAFA;
-            --text-muted: #A0A0A0;
-            --border-color: rgba(255, 255, 255, 0.1);
-            --accent: #A78BFA;
-            --accent-strong: #F59E0B;
-        }
-
-        /* Light mode colors */
-        [data-theme="light"], .stApp[data-theme="light"] {
-            --bg-primary: #FFFFFF;
-            --bg-secondary: #F0F2F6;
-            --bg-card: #FFFFFF;
-            --text-primary: #31333F;
-            --text-muted: #808495;
-            --border-color: rgba(0, 0, 0, 0.1);
+        /* Force dark mode colors - always applied */
+        :root, [data-theme="light"], [data-theme="dark"], .stApp {
+            --bg-primary: #0E1117 !important;
+            --bg-secondary: #262730 !important;
+            --bg-card: #1E1E2E !important;
+            --text-primary: #FAFAFA !important;
+            --text-muted: #A0A0A0 !important;
+            --border-color: rgba(255, 255, 255, 0.1) !important;
+            --accent: #A78BFA !important;
+            --accent-strong: #F59E0B !important;
         }
 
         /* Hide the sidebar (because filters are already on the main page) */
@@ -338,8 +328,8 @@ def render_map(df: pd.DataFrame):
         else:
             record['max_pm25_display'] = "N/A"
 
-    # Detect current theme (can also use st.get_option or similar for the user setting)
-    is_dark_mode = True  # For now, statically assume dark mode
+    # Force dark mode for all map elements
+    is_dark_mode = True
     
     # Use an expression in the Layer to calculate colors, avoiding serialization issues
     layer = pdk.Layer(
@@ -359,9 +349,9 @@ def render_map(df: pd.DataFrame):
         opacity=0.85,
     )
 
-    # Adjust tooltip background and text color based on theme
-    tooltip_bg = "#0E1117" if is_dark_mode else "#FFFFFF"
-    tooltip_color = "white" if is_dark_mode else "black"
+    # Dark mode tooltip styling
+    tooltip_bg = "#0E1117"
+    tooltip_color = "white"
     
     tooltip = {
         "html": "<b>{location_name}</b><br/>"
@@ -377,8 +367,8 @@ def render_map(df: pd.DataFrame):
         },
     }
 
-    # Map style based on theme
-    map_style = "dark" if is_dark_mode else "light"
+    # Always use dark map style
+    map_style = "dark"
     
     deck = pdk.Deck(
         layers=[layer],
@@ -400,14 +390,20 @@ def render_map(df: pd.DataFrame):
 def render_trend_chart(df: pd.DataFrame, selected_locations: list = None):
     """
     Render a line chart showing PM2.5 trends over time for selected locations.
-    
+
+    Functionality description: (What this function does):
+    - render = render/display
+    - trend_chart = trend chart
+
+    Purpose: Shows a line chart of PM2.5 values over time for selected stations, maximum 5 at a time for clarity.
+
     Parameters:
     -----------
     df : pd.DataFrame
         Filtered measurements DataFrame
     selected_locations : list
-        List of selected location names (max 5 will be shown)
-    
+        List of selected location names (maximum 5 shown)
+
     Returns:
     --------
     None (displays chart in Streamlit)
@@ -415,10 +411,14 @@ def render_trend_chart(df: pd.DataFrame, selected_locations: list = None):
     if df.empty:
         st.info("No data available for trend chart.")
         return
-    
+
+    # Ensure 'value' column is numeric type
+    df_copy = df.copy()
+    df_copy["value"] = pd.to_numeric(df_copy["value"], errors='coerce')
+
     # If locations are selected, filter for them
     if selected_locations and len(selected_locations) > 0:
-        trend_df = df[df["location_name"].isin(selected_locations)].copy()
+        trend_df = df_copy[df_copy["location_name"].isin(selected_locations)].copy()
         # Limit to max 5 locations for readability
         if len(selected_locations) > 5:
             top_5_locations = selected_locations[:5]
@@ -426,25 +426,25 @@ def render_trend_chart(df: pd.DataFrame, selected_locations: list = None):
             st.warning(f"⚠️ Showing only the first 5 selected locations for clarity.")
     else:
         # If no locations selected, show top 5 by average PM2.5
-        location_avg = df.groupby("location_name")["value"].mean().sort_values(ascending=False)
+        location_avg = df_copy.groupby("location_name")["value"].mean().sort_values(ascending=False)
         top_5_locations = location_avg.head(5).index.tolist()
-        trend_df = df[df["location_name"].isin(top_5_locations)].copy()
+        trend_df = df_copy[df_copy["location_name"].isin(top_5_locations)].copy()
         st.info("💡 Showing top 5 locations by average PM2.5. Use the location filter to select specific sites.")
-    
+
     if trend_df.empty:
         st.info("No data available for the selected locations.")
         return
-    
+
     # Aggregate by date and location
     daily_trends = (
         trend_df.groupby(["date", "location_name"])
         .agg({"value": "mean"})
         .reset_index()
     )
-    
+
     # Convert date to datetime for proper plotting
     daily_trends["date"] = pd.to_datetime(daily_trends["date"])
-    
+
     # Create Altair scatterplot
     chart = alt.Chart(daily_trends).mark_circle(size=60, opacity=0.8).encode(
         x=alt.X("date:T", title="Date", axis=alt.Axis(format="%Y-%m-%d")),
@@ -474,12 +474,436 @@ def render_trend_chart(df: pd.DataFrame, selected_locations: list = None):
         labelColor='#F6F7FF',
         titleColor='#F6F7FF'
     )
-    
+
     st.altair_chart(chart, use_container_width=True)
 
 
+def render_top_polluted_locations(df: pd.DataFrame, top_n: int = 10):
+    """
+    Render a ranking of the most polluted locations
+
+    Functionality description: (What this function does):
+    - render = render/display
+    - top_polluted_locations = most polluted location ranking
+
+    Purpose: Shows the ranking of the top N stations with the highest average PM2.5 concentration.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Filtered measurements DataFrame
+    top_n : int
+        Number of top locations to show (default: 10)
+    """
+    if df.empty:
+        st.info("No data available for ranking.")
+        return
+
+    # Ensure 'value' column is numeric type
+    df_copy = df.copy()
+    df_copy["value"] = pd.to_numeric(df_copy["value"], errors='coerce')
+
+    # Calculate average PM2.5 by location
+    top_locations = (
+        df_copy.groupby(["location_id", "location_name", "latitude", "longitude"])
+        .agg({
+            "value": ["mean", "max", "count"]
+        })
+        .reset_index()
+    )
+
+    # Flatten column names
+    top_locations.columns = ["location_id", "location_name", "latitude", "longitude", 
+                              "avg_pm25", "max_pm25", "measurements"]
+
+    # Sort by average PM2.5
+    top_locations = top_locations.sort_values("avg_pm25", ascending=False).head(top_n)
+
+    # Add ranking number
+    top_locations.insert(0, "Rank", range(1, len(top_locations) + 1))
+
+    # Add AQI category
+    def get_aqi_category(pm25):
+        if pm25 < 12:
+            return "🟢 Good"
+        elif pm25 < 35:
+            return "🟡 Moderate"
+        elif pm25 < 55:
+            return "🟠 Unhealthy (Sensitive)"
+        elif pm25 < 150:
+            return "🔴 Unhealthy"
+        else:
+            return "🟣 Very Unhealthy"
+
+    top_locations["AQI Category"] = top_locations["avg_pm25"].apply(get_aqi_category)
+
+    # Format numeric columns
+    top_locations["avg_pm25"] = top_locations["avg_pm25"].round(1)
+    top_locations["max_pm25"] = top_locations["max_pm25"].round(1)
+
+    # Display ranking
+    st.markdown(f"### 🏆 Top {top_n} Most Polluted Locations")
+    st.dataframe(
+        top_locations[["Rank", "location_name", "avg_pm25", "max_pm25", "AQI Category", "measurements"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "location_name": "Location",
+            "avg_pm25": st.column_config.NumberColumn("Avg PM2.5 (µg/m³)", format="%.1f"),
+            "max_pm25": st.column_config.NumberColumn("Peak PM2.5 (µg/m³)", format="%.1f"),
+            "measurements": "Days Monitored"
+        }
+    )
+
+
+def render_aqi_distribution_pie(df: pd.DataFrame):
+    """
+    Render a pie chart showing the distribution of AQI categories
+
+    Functionality description: (What this function does):
+    - render = render/display
+    - aqi_distribution = Air Quality Index distribution
+    - pie = pie chart
+
+    Purpose: Displays a pie chart showing the percentage of various air quality levels (Good, Moderate, Unhealthy, etc.).
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Filtered measurements DataFrame
+    """
+    if df.empty:
+        st.info("No data available for AQI distribution.")
+        return
+
+    # Categorize PM2.5 values into AQI levels
+    def categorize_aqi(pm25):
+        if pd.isna(pm25):
+            return "Unknown"
+        elif pm25 < 12:
+            return "Good (0-12)"
+        elif pm25 < 35:
+            return "Moderate (12-35)"
+        elif pm25 < 55:
+            return "Unhealthy for Sensitive (35-55)"
+        elif pm25 < 150:
+            return "Unhealthy (55-150)"
+        else:
+            return "Very Unhealthy (150+)"
+
+    aqi_df = df.copy()
+    # Ensure 'value' column is numeric type
+    aqi_df["value"] = pd.to_numeric(aqi_df["value"], errors='coerce')
+    aqi_df["AQI Category"] = aqi_df["value"].apply(categorize_aqi)
+
+    # Count measurements in each category
+    aqi_counts = aqi_df["AQI Category"].value_counts().reset_index()
+    aqi_counts.columns = ["AQI Category", "Count"]
+    aqi_counts["Percentage"] = (aqi_counts["Count"] / aqi_counts["Count"].sum() * 100).round(1)
+
+    # Define color scheme matching AQI standards
+    color_scale = alt.Scale(
+        domain=[
+            "Good (0-12)",
+            "Moderate (12-35)",
+            "Unhealthy for Sensitive (35-55)",
+            "Unhealthy (55-150)",
+            "Very Unhealthy (150+)"
+        ],
+        range=["#00E400", "#FFFF00", "#FF7E00", "#FF0000", "#8F3F97"]
+    )
+
+    # Create pie chart using Altair
+    chart = alt.Chart(aqi_counts).mark_arc(innerRadius=50).encode(
+        theta=alt.Theta("Count:Q"),
+        color=alt.Color("AQI Category:N", scale=color_scale, legend=alt.Legend(title="AQI Category")),
+        tooltip=[
+            alt.Tooltip("AQI Category:N", title="Category"),
+            alt.Tooltip("Count:Q", title="Measurements"),
+            alt.Tooltip("Percentage:Q", title="Percentage", format=".1f")
+        ]
+    ).properties(
+        width=400,
+        height=400,
+        title="Air Quality Distribution"
+    ).configure_title(
+        color='#F6F7FF',
+        fontSize=16,
+        anchor='start'
+    ).configure_legend(
+        labelColor='#F6F7FF',
+        titleColor='#F6F7FF'
+    )
+
+    st.altair_chart(chart, use_container_width=True)
+
+    # Also show summary statistics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        healthy_pct = aqi_counts[aqi_counts["AQI Category"] == "Good (0-12)"]["Percentage"].sum()
+        st.metric("🟢 Good Air Quality", f"{healthy_pct:.1f}%")
+    with col2:
+        moderate_pct = aqi_counts[aqi_counts["AQI Category"] == "Moderate (12-35)"]["Percentage"].sum()
+        st.metric("🟡 Moderate", f"{moderate_pct:.1f}%")
+    with col3:
+        unhealthy_pct = aqi_counts[
+            aqi_counts["AQI Category"].isin([
+                "Unhealthy for Sensitive (35-55)",
+                "Unhealthy (55-150)",
+                "Very Unhealthy (150+)"
+            ])
+        ]["Percentage"].sum()
+        st.metric("🔴 Unhealthy Levels", f"{unhealthy_pct:.1f}%")
+
+
+def render_extreme_events_alert(df: pd.DataFrame, threshold: float = 150):
+    """
+    Show alerts for extreme pollution events (PM2.5 >= threshold)
+
+    Functionality description: (What this function does):
+    - render = render/display
+    - extreme_events = extreme events
+    - alert = alert
+
+    Purpose: Identify and display severe pollution events (when PM2.5 exceeds the set threshold).
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Filtered measurements DataFrame
+    threshold : float
+        PM2.5 threshold for extreme events (default: 150 µg/m³)
+    """
+    # Ensure 'value' column is numeric type
+    df_copy = df.copy()
+    df_copy["value"] = pd.to_numeric(df_copy["value"], errors='coerce')
+
+    extreme_events = df_copy[df_copy["value"] >= threshold].copy()
+
+    if extreme_events.empty:
+        st.success(f"✅ No extreme pollution events (PM2.5 ≥ {threshold} µg/m³) detected in the filtered period.")
+        return
+
+    # Count unique locations and dates
+    num_locations = extreme_events["location_id"].nunique()
+    num_days = extreme_events["date"].nunique()
+    max_value = extreme_events["value"].max()
+
+    # Show alert banner
+    st.error(f"⚠️ **ALERT**: {num_days} extreme pollution event(s) detected at {num_locations} location(s)!")
+
+    # Show top 10 most severe events
+    st.markdown("### 🚨 Most Severe Pollution Events")
+
+    top_events = (
+        extreme_events.nlargest(10, "value")
+        [["date", "location_name", "value", "latitude", "longitude"]]
+        .reset_index(drop=True)
+    )
+
+    top_events["value"] = top_events["value"].round(1)
+    top_events.insert(0, "Severity", ["🔴 SEVERE" if v >= 200 else "🟠 HIGH" for v in top_events["value"]])
+
+    st.dataframe(
+        top_events,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "date": "Date",
+            "location_name": "Location",
+            "value": st.column_config.NumberColumn("PM2.5 (µg/m³)", format="%.1f"),
+            "latitude": st.column_config.NumberColumn("Latitude", format="%.4f"),
+            "longitude": st.column_config.NumberColumn("Longitude", format="%.4f")
+        }
+    )
+
+
+def render_weekday_weekend_comparison(df: pd.DataFrame):
+    """
+    Compare PM2.5 levels between weekdays and weekends
+
+    Functionality description: (What this function does):
+    - render = render/display
+    - weekday_weekend_comparison = comparison of weekdays and weekends
+
+    Purpose: Compare PM2.5 concentration differences between weekdays and weekends to analyze the impact of human activity on air quality.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Filtered measurements DataFrame
+    """
+    if df.empty:
+        st.info("No data available for weekday/weekend comparison.")
+        return
+
+    # Add day of week column
+    df_copy = df.copy()
+    # Ensure 'value' column is numeric type
+    df_copy["value"] = pd.to_numeric(df_copy["value"], errors='coerce')
+    df_copy["datetime_date"] = pd.to_datetime(df_copy["date"])
+    df_copy["day_of_week"] = df_copy["datetime_date"].dt.dayofweek  # Monday=0, Sunday=6
+    df_copy["day_type"] = df_copy["day_of_week"].apply(
+        lambda x: "Weekend" if x >= 5 else "Weekday"
+    )
+
+    # Calculate statistics
+    comparison = df_copy.groupby("day_type")["value"].agg([
+        ("mean", "mean"),
+        ("median", "median"),
+        ("max", "max"),
+        ("count", "count")
+    ]).reset_index()
+
+    # Create bar chart
+    chart = alt.Chart(comparison).mark_bar(size=100).encode(
+        x=alt.X("day_type:N", title="", axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("mean:Q", title="Average PM2.5 (µg/m³)"),
+        color=alt.Color("day_type:N", 
+                       scale=alt.Scale(domain=["Weekday", "Weekend"], 
+                                     range=["#FF6B6B", "#4ECDC4"]),
+                       legend=None),
+        tooltip=[
+            alt.Tooltip("day_type:N", title="Day Type"),
+            alt.Tooltip("mean:Q", title="Average PM2.5", format=".2f"),
+            alt.Tooltip("median:Q", title="Median PM2.5", format=".2f"),
+            alt.Tooltip("count:Q", title="Measurements")
+        ]
+    ).properties(
+        height=400,
+        title="PM2.5 Comparison: Weekday vs Weekend"
+    ).configure_axis(
+        labelColor='#9EA2C7',
+        titleColor='#9EA2C7',
+        gridColor='#262730'
+    ).configure_title(
+        color='#F6F7FF',
+        fontSize=16,
+        anchor='start'
+    )
+
+    st.altair_chart(chart, use_container_width=True)
+
+    # Show percentage difference
+    if len(comparison) == 2:
+        weekday_avg = comparison[comparison["day_type"] == "Weekday"]["mean"].values[0]
+        weekend_avg = comparison[comparison["day_type"] == "Weekend"]["mean"].values[0]
+        diff_pct = ((weekday_avg - weekend_avg) / weekend_avg * 100)
+
+        if abs(diff_pct) > 5:
+            if diff_pct > 0:
+                st.warning(f"📊 Weekdays have **{diff_pct:.1f}% higher** PM2.5 levels than weekends on average. This suggests traffic and industrial activities significantly impact air quality.")
+            else:
+                st.info(f"📊 Weekends have **{abs(diff_pct):.1f}% higher** PM2.5 levels than weekdays on average.")
+        else:
+            st.info(f"📊 PM2.5 levels are similar between weekdays and weekends (difference: {diff_pct:.1f}%).")
+
+
+def render_seasonal_trends(df: pd.DataFrame):
+    """
+    Show monthly PM2.5 trends to identify seasonal patterns
+
+    Functionality description: (What this function does):
+    - render = render/display
+    - seasonal_trends = seasonal trends
+
+    Purpose: Show the monthly variation of PM2.5 to identify seasonal patterns (e.g., winter heating causing increased pollution).
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Filtered measurements DataFrame
+    """
+    if df.empty:
+        st.info("No data available for seasonal analysis.")
+        return
+
+    df_copy = df.copy()
+    # Ensure 'value' column is numeric type
+    df_copy["value"] = pd.to_numeric(df_copy["value"], errors='coerce')
+    df_copy["datetime_date"] = pd.to_datetime(df_copy["date"])
+    df_copy["month"] = df_copy["datetime_date"].dt.month
+    df_copy["month_name"] = df_copy["datetime_date"].dt.strftime("%B")
+
+    # Calculate monthly statistics
+    monthly_stats = df_copy.groupby(["month", "month_name"])["value"].agg([
+        ("mean", "mean"),
+        ("min", "min"),
+        ("max", "max")
+    ]).reset_index().sort_values("month")
+
+    # Create line chart with area
+    base = alt.Chart(monthly_stats).encode(
+        x=alt.X("month_name:N", title="Month", sort=[
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ])
+    )
+
+    # Line for average
+    line = base.mark_line(point=True, color="#F59E0B", size=3).encode(
+        y=alt.Y("mean:Q", title="PM2.5 Concentration (µg/m³)"),
+        tooltip=[
+            alt.Tooltip("month_name:N", title="Month"),
+            alt.Tooltip("mean:Q", title="Average PM2.5", format=".2f"),
+            alt.Tooltip("min:Q", title="Min PM2.5", format=".2f"),
+            alt.Tooltip("max:Q", title="Max PM2.5", format=".2f")
+        ]
+    )
+
+    # Area for range
+    area = base.mark_area(opacity=0.3, color="#F59E0B").encode(
+        y=alt.Y("min:Q", title=""),
+        y2="max:Q"
+    )
+
+    chart = (area + line).properties(
+        height=400,
+        title="Monthly PM2.5 Trends (Seasonal Pattern)"
+    ).configure_axis(
+        labelColor='#9EA2C7',
+        titleColor='#9EA2C7',
+        gridColor='#262730'
+    ).configure_title(
+        color='#F6F7FF',
+        fontSize=16,
+        anchor='start'
+    )
+
+    st.altair_chart(chart, use_container_width=True)
+
+    # Find worst and best months
+    worst_month = monthly_stats.loc[monthly_stats["mean"].idxmax()]
+    best_month = monthly_stats.loc[monthly_stats["mean"].idxmin()]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(
+            "🔴 Worst Month",
+            worst_month["month_name"],
+            f"{worst_month['mean']:.1f} µg/m³",
+            delta_color="inverse"
+        )
+    with col2:
+        st.metric(
+            "🟢 Best Month",
+            best_month["month_name"],
+            f"{best_month['mean']:.1f} µg/m³",
+            delta_color="normal"
+        )
+
+
 def main():
-    st.set_page_config(page_title="US PM2.5 Observatory", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(
+        page_title="US PM2.5 Observatory",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+        menu_items={
+            'Get Help': None,
+            'Report a bug': None,
+            'About': None
+        }
+    )
     inject_custom_styles()
 
     st.markdown(
@@ -510,7 +934,7 @@ def main():
 
     # Create two-column layout: filters on the left, content on the right
     filter_col, content_col = st.columns([1, 3])
-    
+
     # Left filter panel
     with filter_col:
         st.markdown("<div class='card-eyebrow'>Scenario</div>", unsafe_allow_html=True)
@@ -564,7 +988,7 @@ def main():
 
     # Apply filters
     filtered = measurements.copy()
-    
+
     # Apply the date filter if valid
     if start_date and end_date:
         date_series = pd.to_datetime(filtered["date"]).dt.date
@@ -580,16 +1004,16 @@ def main():
         # KEY METRICS (top, four columns)
         st.markdown("<div class='card-eyebrow'>Key Metrics</div>", unsafe_allow_html=True)
         metric_cols = st.columns(4)
-        
+
         with metric_cols[0]:
             render_metric("Locations", humanize(filtered["location_id"].nunique()), "Stations with PM2.5 data")
-        
+
         with metric_cols[1]:
             render_metric("Average PM2.5", humanize(filtered["value"].mean()), "Daily mean after filters")
-        
+
         with metric_cols[2]:
             render_metric("Peak PM2.5", humanize(filtered["value"].max()), "Maximum recorded value")
-        
+
         with metric_cols[3]:
             render_metric("Rows", humanize(len(filtered)), "Daily measurements in view")
 
@@ -597,9 +1021,38 @@ def main():
         st.markdown("<div class='section-label' style='margin-top:2rem;'>National Overview</div>", unsafe_allow_html=True)
         map_data = render_map(filtered)
 
-        
+        # Extreme Events Alert
+        # Alert for serious pollution when PM2.5 exceeds 150
+        st.markdown("<div class='section-label' style='margin-top:2rem;'>Pollution Alerts</div>", unsafe_allow_html=True)
+        render_extreme_events_alert(filtered, threshold=150)
 
-        # Monitoring stations list (below the trend chart)
+        # Top 10 Polluted Locations
+        # Display ranking of the top 10 stations with highest average PM2.5
+        st.markdown("<div class='section-label' style='margin-top:2rem;'>Most Polluted Areas</div>", unsafe_allow_html=True)
+        render_top_polluted_locations(filtered, top_n=10)
+
+        # Trend Chart
+        # Show daily PM2.5 trends over time at selected locations
+        st.markdown("<div class='section-label' style='margin-top:2rem;'>Daily PM2.5 Trends</div>", unsafe_allow_html=True)
+        render_trend_chart(filtered, selected_locations)
+
+        # AQI Distribution
+        # Pie chart breaking down measurements by air quality levels
+        st.markdown("<div class='section-label' style='margin-top:2rem;'>Air Quality Distribution</div>", unsafe_allow_html=True)
+        render_aqi_distribution_pie(filtered)
+
+        # Weekday vs Weekend
+        # Analyze impact of work week vs weekend on air quality
+        st.markdown("<div class='section-label' style='margin-top:2rem;'>Weekday vs Weekend Analysis</div>", unsafe_allow_html=True)
+        render_weekday_weekend_comparison(filtered)
+
+        # Seasonal Trends
+        # Show monthly changes and seasonal pollution pattern
+        st.markdown("<div class='section-label' style='margin-top:2rem;'>Seasonal Patterns</div>", unsafe_allow_html=True)
+        render_seasonal_trends(filtered)
+
+        # Monitoring stations list
+        # Display a detailed table of all monitoring stations
         if not map_data.empty:
             st.markdown("<h4 style='margin-top:2rem;'>Monitoring Sites</h4>", unsafe_allow_html=True)
             st.dataframe(
@@ -607,9 +1060,6 @@ def main():
                 use_container_width=True,
                 height=min(420, 60 + 30 * len(map_data)),
             )
-        # Trend Chart (below the map)
-        st.markdown("<div class='section-label' style='margin-top:2rem;'>Daily PM2.5 Trends</div>", unsafe_allow_html=True)
-        render_trend_chart(filtered, selected_locations)
 
 
 if __name__ == "__main__":

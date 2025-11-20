@@ -1,0 +1,31 @@
+# Streamlit Configuration File
+# This file forces the app to always use dark mode
+
+[theme]
+# Primary theme color - purple accent
+primaryColor = "#A78BFA"
+
+# Background color - dark mode
+backgroundColor = "#0E1117"
+
+# Secondary background color
+secondaryBackgroundColor = "#262730"
+
+# Text color - light for dark mode
+textColor = "#FAFAFA"
+
+# Font family
+font = "sans serif"
+
+[client]
+# Force dark theme
+# Note: This setting helps suggest dark mode, but users can still override it
+showErrorDetails = true
+
+[server]
+# Run on specific port
+port = 8501
+# Allow external connections
+enableCORS = false
+enableXsrfProtection = true
+
