@@ -1,0 +1,532 @@
+"""
+Streamlit-based demo map to explore 2024 US PM2.5 data pulled from OpenAQ.
+
+The layout includes filters, a PM2.5 heatmap view, and monitoring site details
+for stakeholders to explore air quality data across the United States.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+import json
+import numpy as np
+
+import altair as alt
+import pandas as pd
+import pydeck as pdk
+import streamlit as st
+
+from utils.db_loader import (
+    load_measurements as load_measurements_from_db,
+    load_sensor_metadata as load_sensor_metadata_from_db,
+)
+SCENARIO_THRESHOLDS = {
+    "Base Case (All Data)": None,
+    "AQI Watch (≥35 µg/m³)": 35,
+    "Severe Episode (≥55 µg/m³)": 55,
+}
+
+
+@st.cache_data(show_spinner=True)
+def load_measurements_cached() -> pd.DataFrame:
+    return load_measurements_from_db(parameter="pm25")
+
+
+@st.cache_data(show_spinner=True)
+def load_sensor_metadata_cached() -> pd.DataFrame:
+    return load_sensor_metadata_from_db()
+
+
+def inject_custom_styles():
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+        /* Dark mode colors (default) */
+        :root {
+            --bg-primary: #0E1117;
+            --bg-secondary: #262730;
+            --bg-card: #1E1E2E;
+            --text-primary: #FAFAFA;
+            --text-muted: #A0A0A0;
+            --border-color: rgba(255, 255, 255, 0.1);
+            --accent: #A78BFA;
+            --accent-strong: #F59E0B;
+        }
+
+        /* Light mode colors */
+        [data-theme="light"], .stApp[data-theme="light"] {
+            --bg-primary: #FFFFFF;
+            --bg-secondary: #F0F2F6;
+            --bg-card: #FFFFFF;
+            --text-primary: #31333F;
+            --text-muted: #808495;
+            --border-color: rgba(0, 0, 0, 0.1);
+        }
+
+        /* Hide the sidebar (because filters are already on the main page) */
+        section[data-testid="stSidebar"] {
+            display: none !important;
+        }
+
+        /* Main page background */
+        .stApp, .main, .block-container {
+            background-color: var(--bg-primary) !important;
+            color: var(--text-primary) !important;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        /* Filter panel style */
+        [data-testid="column"]:first-child {
+            background-color: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-right: 1rem;
+        }
+
+        /* Spacing between elements in filter panel */
+        [data-testid="column"]:first-child .stRadio,
+        [data-testid="column"]:first-child .stDateInput,
+        [data-testid="column"]:first-child .stMultiSelect {
+            margin-bottom: 1rem;
+        }
+
+        /* Sidebar panel content background */
+        section[data-testid="stSidebar"] .stMarkdown,
+        section[data-testid="stSidebar"] .stRadio,
+        section[data-testid="stSidebar"] .stDateInput,
+        section[data-testid="stSidebar"] .stMultiSelect {
+            background-color: var(--bg-primary) !important;
+        }
+
+        .stApp header, .stApp [data-testid="stToolbar"] {
+            background: transparent;
+        }
+
+        .hero {
+            padding: 16px 0 30px;
+        }
+
+        .hero-eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 0.4em;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+        }
+
+        .hero h1 {
+            font-size: clamp(2.2rem, 3vw, 3.2rem);
+            margin: 0.2rem 0;
+            color: var(--text-primary);
+        }
+
+        .hero p {
+            color: var(--text-muted);
+            max-width: 720px;
+            font-size: 1rem;
+        }
+
+        .card-eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 0.3em;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-bottom: 0.4rem;
+        }
+
+        .scenario-note {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 0.4rem;
+        }
+
+        .insight-metric {
+            margin-bottom: 18px;
+        }
+
+        .metric-label {
+            font-size: 0.75rem;
+            letter-spacing: 0.25em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        .metric-value {
+            font-size: 2.4rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-top: 0.2rem;
+        }
+
+        .metric-helper {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .map-card .stPydeckChart {
+            height: 520px !important;
+        }
+
+        .card-caption {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 0.6rem;
+        }
+
+        .section-label {
+            text-transform: uppercase;
+            letter-spacing: 0.35em;
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            margin-bottom: 12px;
+        }
+
+        /* Radio buttons styling */
+        .stRadio > label {
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        div[data-baseweb="radio"] > div {
+            background: var(--bg-secondary) !important;
+            border-radius: 999px;
+            padding: 4px;
+        }
+
+        div[data-baseweb="radio"] label {
+            border-radius: 999px;
+            padding: 6px 16px;
+            color: var(--text-primary) !important;
+        }
+
+        div[data-baseweb="radio"] input:checked + div {
+            background-color: var(--accent) !important;
+        }
+
+        /* DataFrames */
+        .stDataFrame {
+            margin-top: 12px;
+            background-color: var(--bg-card) !important;
+        }
+
+        /* Input fields */
+        .stDateInput input, .stMultiSelect input {
+            background-color: var(--bg-secondary) !important;
+            color: var(--text-primary) !important;
+            border-color: var(--border-color) !important;
+        }
+
+        /* Ensure all text is properly colored */
+        p, span, div, label {
+            color: var(--text-primary);
+        }
+
+        /* Fix sidebar text color */
+        section[data-testid="stSidebar"] * {
+            color: var(--text-primary) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+
+def humanize(value: float | int | None) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{value:,.1f}"
+
+
+def render_metric(label: str, value: str, helper: str = ""):
+    helper_html = f"<div class='metric-helper'>{helper}</div>" if helper else ""
+    st.markdown(
+        f"""
+        <div class="insight-metric">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value">{value}</div>
+            {helper_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def get_heatmap_color(pm25_value):
+    """
+    Returns the color for the heatmap based on PM2.5 concentration (green -> yellow -> orange -> red -> purple)
+    
+    The color steps follow AQI standards:
+    - 0-12: Green (Good)
+    - 12-35: Yellow (Moderate)
+    - 35-55: Orange (Unhealthy for Sensitive Groups)
+    - 55-150: Red (Unhealthy)
+    - 150+: Purple (Very Unhealthy)
+    """
+    if pd.isna(pm25_value):
+        return [128, 128, 128]  # Gray
+    elif pm25_value < 12:
+        return [0, 228, 0]      # Green
+    elif pm25_value < 35:
+        return [255, 255, 0]    # Yellow
+    elif pm25_value < 55:
+        return [255, 126, 0]    # Orange
+    elif pm25_value < 150:
+        return [255, 0, 0]      # Red
+    else:
+        return [143, 63, 151]   # Purple
+
+def render_map(df: pd.DataFrame):
+    if df.empty:
+        st.info("No rows matched the current filters.")
+        return pd.DataFrame()
+
+    # Diagnostic: Show how many rows have latitude/longitude values
+    total_rows = len(df)
+    has_coords = df[df["latitude"].notna() & df["longitude"].notna()]
+    print(f"🔍 Diagnostic: Total rows = {total_rows}, with lat/lon = {len(has_coords)}")
+    
+    agg = (
+        df.groupby(
+            ["location_id", "location_name", "latitude", "longitude"],
+            dropna=False,
+        )
+        .agg(
+            avg_pm25=("value", "mean"),
+            max_pm25=("value", "max"),
+            measurements=("value", "count"),
+        )
+        .reset_index()
+    )
+
+    # Diagnostic: Show aggregated data statistics
+    print(f"🔍 After aggregation: total locations = {len(agg)}")
+    print(f"🔍 Locations with lat/lon = {len(agg[agg['latitude'].notna() & agg['longitude'].notna()])}")
+    
+    agg = agg.dropna(subset=["latitude", "longitude"])
+    
+    # Increase radius based on PM2.5 concentration, emphasize dots
+    agg["radius"] = agg["avg_pm25"].clip(lower=5) * 2000  # scaled up from 1200 to 2000
+
+    if agg.empty:
+        st.warning(f"⚠️ {total_rows:,} rows in the database, but none have latitude/longitude coordinates.")
+        st.info("💡 Please verify: 1) Whether data fetch included lat/lon 2) If your latitude/longitude columns contain any data.")
+        return pd.DataFrame()  # Return empty DataFrame instead of None
+
+    view_state = pdk.ViewState(
+        latitude=float(agg["latitude"].mean()),
+        longitude=float(agg["longitude"].mean()),
+        zoom=3.5,
+        pitch=30,
+    )
+
+    # Use JSON serialization/deserialization to ensure native Python types
+    agg_json = agg.to_json(orient='records', date_format='iso')
+    data = json.loads(agg_json)
+    
+    # Format values for tooltip display
+    for record in data:
+        if 'avg_pm25' in record and record['avg_pm25'] is not None:
+            record['avg_pm25_display'] = f"{record['avg_pm25']:.1f}"
+        else:
+            record['avg_pm25_display'] = "N/A"
+            
+        if 'max_pm25' in record and record['max_pm25'] is not None:
+            record['max_pm25_display'] = f"{record['max_pm25']:.1f}"
+        else:
+            record['max_pm25_display'] = "N/A"
+
+    # Detect current theme (can also use st.get_option or similar for the user setting)
+    is_dark_mode = True  # For now, statically assume dark mode
+    
+    # Use an expression in the Layer to calculate colors, avoiding serialization issues
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=data,
+        get_position="[longitude, latitude]",
+        get_radius="radius",
+        # Use a JavaScript expression for fill color based on avg_pm25
+        get_fill_color="""
+            avg_pm25 < 12 ? [0, 228, 0] :
+            avg_pm25 < 35 ? [255, 255, 0] :
+            avg_pm25 < 55 ? [255, 126, 0] :
+            avg_pm25 < 150 ? [255, 0, 0] :
+            [143, 63, 151]
+        """,
+        pickable=True,
+        opacity=0.85,
+    )
+
+    # Adjust tooltip background and text color based on theme
+    tooltip_bg = "#0E1117" if is_dark_mode else "#FFFFFF"
+    tooltip_color = "white" if is_dark_mode else "black"
+    
+    tooltip = {
+        "html": "<b>{location_name}</b><br/>"
+                "Average PM2.5: {avg_pm25_display} µg/m³<br/>"
+                "Maximum PM2.5: {max_pm25_display} µg/m³<br/>"
+                "Measurements per day: {measurements}",
+        "style": {
+            "backgroundColor": tooltip_bg,
+            "color": tooltip_color,
+            "fontSize": "14px",
+            "padding": "10px",
+            "borderRadius": "5px",
+        },
+    }
+
+    # Map style based on theme
+    map_style = "dark" if is_dark_mode else "light"
+    
+    deck = pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        tooltip=tooltip,
+        map_provider="carto",
+        map_style=map_style,
+    )
+
+    st.pydeck_chart(deck, use_container_width=True)
+    st.markdown(
+        "<p class='card-caption'>Color means PM2.5 concentration: 🟢 Good → 🟡 Moderate → 🟠 Unhealthy for Sensitive Groups → 🔴 Unhealthy → 🟣 Very Unhealthy</p>",
+        unsafe_allow_html=True,
+    )
+
+    return agg.sort_values("avg_pm25", ascending=False)
+
+
+
+
+def main():
+    st.set_page_config(page_title="US PM2.5 Observatory", layout="wide", initial_sidebar_state="collapsed")
+    inject_custom_styles()
+
+    st.markdown(
+        """
+        <div class="hero">
+            <div class="hero-eyebrow">National Air Quality Intelligence</div>
+            <h1>US PM2.5 Observatory</h1>
+            <p>
+                Explore daily particulate matter levels across the United States.
+                Switch between scenarios, use filters, and review sensor monitoring coverage from Supabase.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    measurements = load_measurements_cached()
+    sensor_meta = load_sensor_metadata_cached()
+
+    if measurements.empty:
+        st.error("No PM2.5 measurements available in PostgreSQL yet. Please trigger the Airflow DAG to load data.")
+        st.stop()
+
+    min_date = measurements["date"].min()
+    max_date = measurements["date"].max()
+    default_start = pd.to_datetime(min_date).date()
+    default_end = pd.to_datetime(max_date).date()
+
+    # Create two-column layout: filters on the left, content on the right
+    filter_col, content_col = st.columns([1, 3])
+    
+    # Left filter panel
+    with filter_col:
+        st.markdown("<div class='card-eyebrow'>Scenario</div>", unsafe_allow_html=True)
+        scenario_choice = st.radio(
+            "Scenario",
+            list(SCENARIO_THRESHOLDS.keys()),
+            horizontal=False,
+            label_visibility="collapsed",
+        )
+        scenario_threshold = SCENARIO_THRESHOLDS[scenario_choice]
+        scenario_text = (
+            "Showing all measurements for all locations."
+            if scenario_threshold is None
+            else f"Highlighting days with PM2.5 ≥ {scenario_threshold} µg/m³."
+        )
+        st.markdown(f"<div class='scenario-note'>{scenario_text}</div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='card-eyebrow' style='margin-top:1.4rem;'>Filters</div>", unsafe_allow_html=True)
+        date_range = st.date_input(
+            "Date range",
+            value=(default_start, default_end),
+            min_value=min_date,
+            max_value=max_date,
+            key="date_range_input",
+        )
+
+        # Handle possible return types from date input
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            # The user picked both start and end dates
+            start_date, end_date = date_range
+        elif isinstance(date_range, tuple) and len(date_range) == 1:
+            # Only one date picked
+            start_date = date_range[0]
+            end_date = default_end
+        elif date_range is not None:
+            # Single date value
+            start_date = date_range
+            end_date = date_range
+        else:
+            # No date chosen, use defaults
+            start_date = default_start
+            end_date = default_end
+
+        location_options = sensor_meta["location_name"].unique().tolist() if not sensor_meta.empty else []
+        selected_locations = st.multiselect(
+            "Locations (optional)",
+            location_options,
+            default=[],
+            key="location_filter",
+        )
+
+    # Apply filters
+    filtered = measurements.copy()
+    
+    # Apply the date filter if valid
+    if start_date and end_date:
+        date_series = pd.to_datetime(filtered["date"]).dt.date
+        mask = (date_series >= start_date) & (date_series <= end_date)
+        filtered = filtered[mask]
+    if selected_locations:
+        filtered = filtered[filtered["location_name"].isin(selected_locations)]
+    if scenario_threshold is not None:
+        filtered = filtered[filtered["value"] >= scenario_threshold]
+
+    # Right panel content
+    with content_col:
+        # KEY METRICS (top, four columns)
+        st.markdown("<div class='card-eyebrow'>Key Metrics</div>", unsafe_allow_html=True)
+        metric_cols = st.columns(4)
+        
+        with metric_cols[0]:
+            render_metric("Locations", humanize(filtered["location_id"].nunique()), "Stations with PM2.5 data")
+        
+        with metric_cols[1]:
+            render_metric("Average PM2.5", humanize(filtered["value"].mean()), "Daily mean after filters")
+        
+        with metric_cols[2]:
+            render_metric("Peak PM2.5", humanize(filtered["value"].max()), "Maximum recorded value")
+        
+        with metric_cols[3]:
+            render_metric("Rows", humanize(len(filtered)), "Daily measurements in view")
+
+        # Map (below the KEY METRICS row)
+        st.markdown("<div class='section-label' style='margin-top:2rem;'>National Overview</div>", unsafe_allow_html=True)
+        map_data = render_map(filtered)
+
+        # Monitoring stations list (below the map)
+        if not map_data.empty:
+            st.markdown("<h4 style='margin-top:2rem;'>Monitoring Sites</h4>", unsafe_allow_html=True)
+            st.dataframe(
+                map_data,
+                use_container_width=True,
+                height=min(420, 60 + 30 * len(map_data)),
+            )
+
+
+if __name__ == "__main__":
+    main()

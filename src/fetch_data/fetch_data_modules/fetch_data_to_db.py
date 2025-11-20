@@ -10,6 +10,40 @@ from pathlib import Path
 # Load environment variables
 load_dotenv()
 
+def load_location_coordinates():
+    """
+    Load a lookup table mapping location_id to coordinates from openaq_us_locations_enriched.csv
+
+    Returns:
+    --------
+    dict: {location_id: {'latitude': float, 'longitude': float}}
+    """
+    csv_path = Path(__file__).parent.parent.parent / 'frontend' / 'sensor_locations' / 'openaq_us_locations_enriched.csv'
+    
+    if not csv_path.exists():
+        print(f"⚠️ Warning: Could not find coordinates lookup file {csv_path}")
+        return {}
+    
+    try:
+        df = pd.read_csv(csv_path)
+        # Build dictionary mapping location_id to coordinates
+        coords_dict = {}
+        for _, row in df.iterrows():
+            if pd.notna(row.get('location_id')) and pd.notna(row.get('latitude')) and pd.notna(row.get('longitude')):
+                coords_dict[int(row['location_id'])] = {
+                    'latitude': float(row['latitude']),
+                    'longitude': float(row['longitude'])
+                }
+        
+        print(f"✅ Successfully loaded coordinates for {len(coords_dict)} locations")
+        return coords_dict
+    except Exception as e:
+        print(f"⚠️ Error loading coordinates lookup file: {e}")
+        return {}
+
+# Global variable: Load the coordinates lookup table once
+LOCATION_COORDS = load_location_coordinates()
+
 def get_utc_date_today():
     """
     Returns today's date in UTC as a timezone-aware datetime.date object.
@@ -140,113 +174,220 @@ def parse_date_to_openaq_format(date_input):
         raise ValueError(f"Could not parse date '{date_input}'. Error: {e}")
 
 
-def get_sensor_data(client, sensor_id, datetime_from="2025-11-13T00:00:00Z", datetime_to="2025-11-13T00:00:00Z"):
+def get_pm25_sensors_from_location(client, location_id):
     """
-    Fetch data for a single sensor from OpenAQ API.
-    
+    Get all PM2.5 sensors from a specified location
+
+    This function follows the location-based logic from fetch_data_to_csv.py (lines 344-372):
+    1. Get the detailed information for the location
+    2. Extract all sensors from the location
+    3. Filter for PM2.5 sensors
+
     Parameters:
     -----------
     client : OpenAQ
-        OpenAQ client instance with API key
-    sensor_id : int
-        Sensor ID to fetch data for
-    datetime_from : str
-        Start date in various formats (will be parsed)
-    datetime_to : str
-        End date in various formats (will be parsed)
+        OpenAQ API client instance
+    location_id : int
+        Location ID to query
+
+    Returns:
+    --------
+    list
+        List of PM2.5 sensor objects from this location
+        
+    Usage:
+    ------
+    pm25_sensors = get_pm25_sensors_from_location(client, 1671)
+    for sensor in pm25_sensors:
+        print(f"Sensor ID: {sensor.id}, Name: {sensor.name}")
+    """
+    try:
+        # Get detailed location info (including all sensors)
+        location_resp = client.locations.get(location_id)
+        location_obj = (location_resp.results or [None])[0]
+        
+        if location_obj is None:
+            print(f"  ⚠️  Location {location_id} returned no metadata")
+            return []
+        
+        # Extract all sensors
+        sensors = getattr(location_obj, "sensors", []) or []
+        print(f"  Found {len(sensors)} total sensors at location {location_id}")
+        
+        # Filter for PM2.5 sensors (as in fetch_data_to_csv.py lines 358-364)
+        pm25_sensors = [
+            sensor
+            for sensor in sensors
+            if getattr(sensor.parameter, "name", "").lower() == "pm25"
+        ]
+        
+        print(f"  After filtering for PM2.5: {len(pm25_sensors)} sensors")
+        
+        return pm25_sensors
     
+    except Exception as e:
+        print(f"  ⚠️  Could not retrieve location {location_id}: {e}")
+        return []
+
+
+def fetch_sensor_measurements(client, sensor, datetime_from, datetime_to, location_id=None):
+    """
+    Fetch measurements for a single sensor
+
+    This function follows the logic from fetch_data_to_csv.py (lines 183-252)
+
+    Parameters:
+    -----------
+    client : OpenAQ
+        OpenAQ API client instance
+    sensor : object
+        Sensor object from OpenAQ API (taken from location.sensors)
+    datetime_from : str
+        Start date in OpenAQ format
+    datetime_to : str
+        End date in OpenAQ format
+    location_id : int, optional
+        Location ID, used for looking up coordinates in CSV
+
     Returns:
     --------
     pd.DataFrame
-        DataFrame with columns: sensor_id, parameter, datetime_utc, datetime_local,
-        value, units, coverage_percent, min, max, median
+        DataFrame with measurement data
     """
-    datetime_from = parse_date_to_openaq_format(datetime_from)
-    datetime_to = parse_date_to_openaq_format(datetime_to)
-
-    all_data = []
+    start = parse_date_to_openaq_format(datetime_from)
+    end = parse_date_to_openaq_format(datetime_to)
+    
+    records = []
     page = 1
     
-    print(f"\nFetching data for sensor {sensor_id}...")
+    sensor_id = sensor.id
+    
+    # Prefer to get coordinates from CSV mapping (most reliable)
+    sensor_lat = None
+    sensor_lon = None
+    
+    if location_id and location_id in LOCATION_COORDS:
+        sensor_lat = LOCATION_COORDS[location_id]['latitude']
+        sensor_lon = LOCATION_COORDS[location_id]['longitude']
+        print(f"  ↳ Fetching sensor {sensor_id} ({sensor.name}) [CSV coords: lat={sensor_lat}, lon={sensor_lon}]")
+    else:
+        # Fallback: get coordinates from sensor object
+        sensor_coords = getattr(sensor, 'coordinates', None)
+        sensor_lat = getattr(sensor_coords, 'latitude', None) if sensor_coords else None
+        sensor_lon = getattr(sensor_coords, 'longitude', None) if sensor_coords else None
+        print(f"  ↳ Fetching sensor {sensor_id} ({sensor.name}) [API coords: lat={sensor_lat}, lon={sensor_lon}]")
     
     while True:
         try:
             response = client.measurements.list(
                 sensors_id=sensor_id,
-                datetime_from=datetime_from,  
-                datetime_to=datetime_to,      
+                datetime_from=start,
+                datetime_to=end,
                 data="days",
                 limit=1000,
-                page=page
+                page=page,
             )
-            
-            if not response.results:
-                break
-            
-            for result in response.results:
-                all_data.append({
-                    'sensor_id': sensor_id,
-                    'parameter': result.parameter.name,
-                    'datetime_utc': result.period.datetime_from.utc,
-                    'datetime_local': result.period.datetime_from.local,
-                    'value': result.value,
-                    'units': result.parameter.units,
-                    'coverage_percent': result.coverage.percent_complete if result.coverage else None,
-                    'min': result.summary.min if result.summary else None,
-                    'max': result.summary.max if result.summary else None,
-                    'median': result.summary.median if result.summary else None,
-                })
-            
-            print(f"  Page {page}: {len(response.results)} records")
-            
-            if len(response.results) < 1000:
-                break
-            
-            page += 1
-            
-        except Exception as e:
-            print(f"  Error on page {page}: {e}")
+        except Exception as exc:
+            print(f"    ⚠️  Error on page {page}: {exc}")
             break
+        
+        if not response.results:
+            break
+        
+        # Process each measurement record (using sensor coordinates)
+        for result in response.results:
+            period = getattr(result, "period", None)
+            datetime_from_obj = getattr(period, "datetime_from", None)
+            
+            records.append({
+                'sensor_id': sensor_id,
+                'parameter': getattr(result.parameter, "name", "pm25"),
+                'datetime_utc': getattr(datetime_from_obj, "utc", None),
+                'datetime_local': getattr(datetime_from_obj, "local", None),
+                'value': result.value,
+                'units': getattr(result.parameter, "units", None),
+                'coverage_percent': getattr(getattr(result, "coverage", None), "percent_complete", None),
+                'min': getattr(getattr(result, "summary", None), "min", None),
+                'max': getattr(getattr(result, "summary", None), "max", None),
+                'median': getattr(getattr(result, "summary", None), "median", None),
+                'latitude': sensor_lat,   # Use sensor coordinates
+                'longitude': sensor_lon,  # Use sensor coordinates
+            })
+        
+        print(f"    Page {page}: {len(response.results)} records")
+        
+        if len(response.results) < 1000:
+            break
+        
+        page += 1
     
-    df = pd.DataFrame(all_data)
-    print(f"Collected {len(df)} records for sensor {sensor_id}")
+    df = pd.DataFrame(records)
+    
+    # Key: Client-side date filtering (same as fetch_data_to_csv.py lines 241-249)
+    if not df.empty:
+        df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+        start_dt = pd.to_datetime(start) if start else None
+        end_dt = pd.to_datetime(end) if end else None
+        
+        if start_dt is not None:
+            df = df[df["datetime_utc"] >= start_dt]
+        if end_dt is not None:
+            df = df[df["datetime_utc"] <= end_dt]
+        
+        # Convert back to string format
+        df["datetime_utc"] = df["datetime_utc"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    print(f"    Total collected for sensor {sensor_id}: {len(df)} rows")
     
     return df
 
 
 def prepare_dataframe_for_db(df):
     """
-    Prepare the DataFrame for database insertion by ensuring correct data types.
+    Prepare a DataFrame before inserting into the database, ensuring correct data types.
     
     Parameters:
     -----------
     df : pd.DataFrame
-        Raw DataFrame from API
+        Original DataFrame retrieved from the API
     
     Returns:
     --------
     pd.DataFrame
         Cleaned DataFrame ready for database insertion
+        
+    Purpose of this function:
+    - prepare = prepare
+    - dataframe = pandas data structure
+    - for_db = for database use
+    That is, "prepare DataFrame for database insertion"
+    
+    It ensures:
+    1. datetime columns are in correct datetime format
+    2. numerical columns are of numeric type
+    3. string columns are string type
     """
     if df.empty:
         return df
     
     df_clean = df.copy()
     
-    # Convert datetime columns to proper datetime format
+    # Convert datetime columns to correct datetime format
+    # Just like in fetch_data_to_csv.py, ensure correct datetime processing
     if 'datetime_utc' in df_clean.columns:
-        df_clean['datetime_utc'] = pd.to_datetime(df_clean['datetime_utc'])
+        df_clean['datetime_utc'] = pd.to_datetime(df_clean['datetime_utc'], utc=True)
     
     if 'datetime_local' in df_clean.columns:
         df_clean['datetime_local'] = pd.to_datetime(df_clean['datetime_local'])
     
-    # Ensure numeric columns are proper numeric types
-    numeric_columns = ['sensor_id', 'value', 'coverage_percent', 'min', 'max', 'median']
+    # Ensure numeric columns are of correct numeric type
+    # 'coerce' parameter will set invalid values to NaN
+    numeric_columns = ['sensor_id', 'value', 'coverage_percent', 'min', 'max', 'median', 'latitude', 'longitude']
     for col in numeric_columns:
         if col in df_clean.columns:
             df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
     
-    # Ensure string columns are strings
+    # Ensure string columns are string type
     string_columns = ['parameter', 'units']
     for col in string_columns:
         if col in df_clean.columns:
@@ -282,16 +423,17 @@ def save_dataframe_to_db(df, table_name='sensor_data', if_exists='append'):
             raise ValueError(f"Missing key column '{c}' in DataFrame")
     df_clean = df_clean.drop_duplicates(subset=key_cols)
 
-    # Only keep columns we actually insert, in the right order
+    # Only keep the columns we need to insert, in the correct order
     cols = [
         'sensor_id', 'parameter', 'datetime_utc', 'datetime_local',
-        'value', 'units', 'coverage_percent', 'min', 'max', 'median'
+        'value', 'units', 'coverage_percent', 'min', 'max', 'median',
+        'latitude', 'longitude'
     ]
     missing = [c for c in cols if c not in df_clean.columns]
     if missing:
         raise ValueError(f"Missing columns for insert: {missing}")
 
-    # Fast conversion to list-of-dicts (no iterrows)
+    # Quickly convert to list-of-dicts (better than using iterrows, more efficient)
     records = df_clean[cols].to_dict(orient='records')
 
     if not records:
@@ -304,10 +446,10 @@ def save_dataframe_to_db(df, table_name='sensor_data', if_exists='append'):
         insert_sql = f"""
             INSERT INTO {table_name}
             (sensor_id, parameter, datetime_utc, datetime_local, value, units,
-             coverage_percent, min, max, median)
+             coverage_percent, min, max, median, latitude, longitude)
             VALUES
             (:sensor_id, :parameter, :datetime_utc, :datetime_local, :value, :units,
-             :coverage_percent, :min, :max, :median)
+             :coverage_percent, :min, :max, :median, :latitude, :longitude)
             ON CONFLICT (sensor_id, parameter, datetime_utc) DO NOTHING
         """
 
@@ -331,55 +473,106 @@ def save_dataframe_to_db(df, table_name='sensor_data', if_exists='append'):
     finally:
         engine.dispose()
 
-def fetch_and_save_sensor_data(client, sensor_ids, datetime_from, datetime_to, table_name='sensor_data'):
+def fetch_and_save_to_db(client, location_ids, datetime_from, datetime_to, table_name='sensor_data'):
     """
-    Fetch data for multiple sensors from OpenAQ API and save to PostgreSQL database.
+    Fetch PM2.5 data from multiple locations and save to database
+
+    This function fully follows the location-based method in fetch_data_to_csv.py (lines 338-408):
+    1. Iterate through each location ID
+    2. Get all sensors from the location
+    3. Filter for PM2.5 sensors
+    4. For each PM2.5 sensor, fetch measurement data
+    5. Save to the database
+
+    Parameters:
+    -----------
+    client : OpenAQ
+        OpenAQ API client instance
+    location_ids : list
+        List of location IDs (read from states_codes.csv for all 50 states)
+    datetime_from : str
+        Start date
+    datetime_to : str
+        End date
+    table_name : str
+        Target database table name
+
+    Returns:
+    --------
+    dict
+        Summary statistics
     """
-    successful = 0
-    failed = 0
+    successful_sensors = 0
+    failed_sensors = 0
+    skipped_locations = 0
     total_rows_attempted = 0
     total_rows_inserted = 0
     total_duplicates = 0
     
-    for idx, sensor_id in enumerate(sensor_ids, 1):
-        print(f"\n[{idx}/{len(sensor_ids)}] Processing sensor {sensor_id}")
-        print("=" * 70)
+    for idx, location_id in enumerate(location_ids, start=1):
+        print(f"\n[{idx}/{len(location_ids)}] Location {location_id}")
+        print("-" * 70)
         
         try:
-            # Fetch data from API
-            df = get_sensor_data(client, sensor_id, datetime_from=datetime_from, datetime_to=datetime_to)
+            # Get all PM2.5 sensors from location (as in fetch_data_to_csv.py)
+            pm25_sensors = get_pm25_sensors_from_location(client, location_id)
             
-            if not df.empty:
-                # Save to database
-                result = save_dataframe_to_db(df, table_name=table_name, if_exists='append')
-                
-                total_rows_attempted += result.get('attempted', 0)
-                total_rows_inserted += result.get('inserted', 0)
-                total_duplicates += result.get('duplicates', 0)
-                successful += 1
-            else:
-                print(f"⚠ No data for sensor {sensor_id}")
-                failed += 1
-                
+            if not pm25_sensors:
+                print(f"  No PM2.5 sensors found at location {location_id}")
+                skipped_locations += 1
+                continue
+            
+            # Fetch data for each PM2.5 sensor
+            for sensor in pm25_sensors:
+                try:
+                    df = fetch_sensor_measurements(
+                        client=client,
+                        sensor=sensor,
+                        datetime_from=datetime_from,
+                        datetime_to=datetime_to,
+                        location_id=location_id  # Pass location_id for coordinates lookup
+                    )
+                    
+                    if df.empty:
+                        print(f"  ⚠️  No measurements for sensor {sensor.id}")
+                        failed_sensors += 1
+                        continue
+                    
+                    # Save to database
+                    result = save_dataframe_to_db(df, table_name=table_name)
+                    
+                    total_rows_attempted += result.get('attempted', 0)
+                    total_rows_inserted += result.get('inserted', 0)
+                    total_duplicates += result.get('duplicates', 0)
+                    successful_sensors += 1
+                    
+                    print(f"  ✅ Saved sensor {sensor.id} to database")
+                    
+                except Exception as e:
+                    print(f"  ✗ Error processing sensor {sensor.id}: {e}")
+                    failed_sensors += 1
+                    
         except Exception as e:
-            print(f"✗ Error processing sensor {sensor_id}: {e}")
-            failed += 1
+            print(f"  ✗ Error processing location {location_id}: {e}")
+            skipped_locations += 1
     
     # Print summary
     print("\n" + "=" * 70)
     print("SUMMARY")
     print("=" * 70)
-    print(f"Successful sensors: {successful}")
-    print(f"Failed sensors: {failed}")
-    print(f"Total sensors: {len(sensor_ids)}")
+    print(f"Locations processed: {len(location_ids) - skipped_locations}/{len(location_ids)}")
+    print(f"Successful PM2.5 sensors: {successful_sensors}")
+    print(f"Failed sensors: {failed_sensors}")
+    print(f"Skipped locations: {skipped_locations}")
     print(f"Rows attempted: {total_rows_attempted}")
     print(f"Rows inserted: {total_rows_inserted}")
     print(f"Duplicates skipped: {total_duplicates}")
     
     return {
-        'successful': successful,
-        'failed': failed,
-        'total': len(sensor_ids),
+        'successful_sensors': successful_sensors,
+        'failed_sensors': failed_sensors,
+        'skipped_locations': skipped_locations,
+        'total_locations': len(location_ids),
         'total_rows_attempted': total_rows_attempted,
         'total_rows_inserted': total_rows_inserted,
         'total_duplicates': total_duplicates

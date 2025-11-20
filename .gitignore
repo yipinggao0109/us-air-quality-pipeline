@@ -12,6 +12,7 @@ venv/
 .venv/
 env/
 ENV/
+.env
 
 ###############
 # AIRFLOW

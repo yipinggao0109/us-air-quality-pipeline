@@ -1,0 +1,37 @@
+# Dockerfile.airflow
+# 這個 Dockerfile 用於建立 Airflow 的 Docker image
+
+# 使用官方的 Airflow image 作為基礎
+FROM apache/airflow:2.7.3-python3.11
+
+# 切換到 root 使用者以安裝系統套件
+USER root
+
+# 安裝系統相依套件（如果需要的話）
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 切換回 airflow 使用者
+USER airflow
+
+# 複製 requirements.txt 到容器中
+COPY requirements.txt /requirements.txt
+
+# 安裝 Python 套件
+# --no-cache-dir 避免快取以減少 image 大小
+RUN pip install --no-cache-dir -r /requirements.txt
+
+# 設定工作目錄
+WORKDIR /opt/airflow
+
+# 說明:
+# - FROM: 指定基礎 image，這裡使用官方的 Airflow 2.7.3 with Python 3.11
+# - USER: 切換使用者（root 可以安裝系統套件，airflow 是執行時的使用者）
+# - RUN: 執行命令（apt-get 安裝系統套件，pip 安裝 Python 套件）
+# - COPY: 從本機複製檔案到容器中
+# - WORKDIR: 設定工作目錄
+

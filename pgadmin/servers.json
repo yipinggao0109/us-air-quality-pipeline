@@ -1,13 +1,14 @@
 {
   "Servers": {
     "1": {
-      "Name": "Supabase AirQuality",
+      "Name": "Supabase AirQuality - New",
       "Group": "Servers",
-      "Host": "aws-0-us-west-2.pooler.supabase.com",
+      "Host": "db.lbshgwgpmlwjoxdczoxg.supabase.co",
       "Port": 5432,
       "MaintenanceDB": "postgres",
-      "Username": "postgres.lrgmkusddtssrrjciapa",
-      "SSLMode": "require"
+      "Username": "postgres",
+      "SSLMode": "require",
+      "Comment": "Direct connection to new Supabase project"
     }
   }
 }
