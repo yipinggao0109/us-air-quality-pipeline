@@ -54,7 +54,7 @@ End-to-end data pipeline that fetches PM2.5 air quality data from OpenAQ API, st
 ### Step 1: Clone Repository
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/yipinggao0109/us-air-quality-pipeline.git
 cd us-air-quality-pipeline
 ```
 
