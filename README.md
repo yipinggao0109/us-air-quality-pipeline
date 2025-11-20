@@ -54,7 +54,7 @@ End-to-end data pipeline that fetches PM2.5 air quality data from OpenAQ API, st
 ### Step 1: Clone Repository
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/yipinggao0109/us-air-quality-pipeline.git
 cd us-air-quality-pipeline
 ```
 
@@ -142,7 +142,7 @@ This will:
 
 **Expected output:**
 ```
-✅ 成功從 states_codes.csv 載入 50 個 location IDs
+✅ Successfully import 50 location_ids from states_codes.csv 
 [1/50] Location 1671
   ↳ Found 5 PM2.5 sensors at location 1671
   Fetching sensor 12345...
