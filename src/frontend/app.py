@@ -397,6 +397,85 @@ def render_map(df: pd.DataFrame):
     return agg.sort_values("avg_pm25", ascending=False)
 
 
+def render_trend_chart(df: pd.DataFrame, selected_locations: list = None):
+    """
+    Render a line chart showing PM2.5 trends over time for selected locations.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Filtered measurements DataFrame
+    selected_locations : list
+        List of selected location names (max 5 will be shown)
+    
+    Returns:
+    --------
+    None (displays chart in Streamlit)
+    """
+    if df.empty:
+        st.info("No data available for trend chart.")
+        return
+    
+    # If locations are selected, filter for them
+    if selected_locations and len(selected_locations) > 0:
+        trend_df = df[df["location_name"].isin(selected_locations)].copy()
+        # Limit to max 5 locations for readability
+        if len(selected_locations) > 5:
+            top_5_locations = selected_locations[:5]
+            trend_df = trend_df[trend_df["location_name"].isin(top_5_locations)]
+            st.warning(f"⚠️ Showing only the first 5 selected locations for clarity.")
+    else:
+        # If no locations selected, show top 5 by average PM2.5
+        location_avg = df.groupby("location_name")["value"].mean().sort_values(ascending=False)
+        top_5_locations = location_avg.head(5).index.tolist()
+        trend_df = df[df["location_name"].isin(top_5_locations)].copy()
+        st.info("💡 Showing top 5 locations by average PM2.5. Use the location filter to select specific sites.")
+    
+    if trend_df.empty:
+        st.info("No data available for the selected locations.")
+        return
+    
+    # Aggregate by date and location
+    daily_trends = (
+        trend_df.groupby(["date", "location_name"])
+        .agg({"value": "mean"})
+        .reset_index()
+    )
+    
+    # Convert date to datetime for proper plotting
+    daily_trends["date"] = pd.to_datetime(daily_trends["date"])
+    
+    # Create Altair scatterplot
+    chart = alt.Chart(daily_trends).mark_circle(size=60, opacity=0.8).encode(
+        x=alt.X("date:T", title="Date", axis=alt.Axis(format="%Y-%m-%d")),
+        y=alt.Y("value:Q", title="PM2.5 Concentration (µg/m³)", scale=alt.Scale(zero=False)),
+        color=alt.Color("location_name:N", title="Location", legend=alt.Legend(
+            orient="top",
+            direction="horizontal",
+            titleAnchor="middle"
+        )),
+        tooltip=[
+            alt.Tooltip("date:T", title="Date", format="%Y-%m-%d"),
+            alt.Tooltip("location_name:N", title="Location"),
+            alt.Tooltip("value:Q", title="PM2.5", format=".1f")
+        ]
+    ).properties(
+        height=400,
+        title="PM2.5 Daily Trends"
+    ).configure_axis(
+        labelColor='#9EA2C7',
+        titleColor='#9EA2C7',
+        gridColor='#262730'
+    ).configure_title(
+        color='#F6F7FF',
+        fontSize=16,
+        anchor='start'
+    ).configure_legend(
+        labelColor='#F6F7FF',
+        titleColor='#F6F7FF'
+    )
+    
+    st.altair_chart(chart, use_container_width=True)
 
 
 def main():
@@ -518,7 +597,9 @@ def main():
         st.markdown("<div class='section-label' style='margin-top:2rem;'>National Overview</div>", unsafe_allow_html=True)
         map_data = render_map(filtered)
 
-        # Monitoring stations list (below the map)
+        
+
+        # Monitoring stations list (below the trend chart)
         if not map_data.empty:
             st.markdown("<h4 style='margin-top:2rem;'>Monitoring Sites</h4>", unsafe_allow_html=True)
             st.dataframe(
@@ -526,6 +607,9 @@ def main():
                 use_container_width=True,
                 height=min(420, 60 + 30 * len(map_data)),
             )
+        # Trend Chart (below the map)
+        st.markdown("<div class='section-label' style='margin-top:2rem;'>Daily PM2.5 Trends</div>", unsafe_allow_html=True)
+        render_trend_chart(filtered, selected_locations)
 
 
 if __name__ == "__main__":
