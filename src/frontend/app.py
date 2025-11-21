@@ -225,9 +225,25 @@ def inject_custom_styles():
 
 
 def humanize(value: float | int | None) -> str:
+    """
+    Format a numeric value for display with thousand separators and one decimal place
+    
+    功能說明：格式化數值，添加千位分隔符並保留一位小數
+    """
     if value is None or pd.isna(value):
         return "—"
     return f"{value:,.1f}"
+
+
+def humanize_int(value: int | None) -> str:
+    """
+    Format an integer value for display with thousand separators (no decimals)
+    
+    功能說明：格式化整數，添加千位分隔符但不顯示小數點
+    """
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{int(value):,}"
 
 
 def render_metric(label: str, value: str, helper: str = ""):
@@ -832,7 +848,7 @@ def render_seasonal_trends(df: pd.DataFrame):
         ("max", "max")
     ]).reset_index().sort_values("month")
 
-    # Create line chart with area
+    # Create line chart with area using unified theme colors
     base = alt.Chart(monthly_stats).encode(
         x=alt.X("month_name:N", title="Month", sort=[
             "January", "February", "March", "April", "May", "June",
@@ -840,8 +856,8 @@ def render_seasonal_trends(df: pd.DataFrame):
         ])
     )
 
-    # Line for average
-    line = base.mark_line(point=True, color="#F59E0B", size=3).encode(
+    # Line for average (using theme orange color)
+    line = base.mark_line(point=alt.OverlayMarkDef(filled=True, size=80), color="#F59E0B", size=3).encode(
         y=alt.Y("mean:Q", title="PM2.5 Concentration (µg/m³)"),
         tooltip=[
             alt.Tooltip("month_name:N", title="Month"),
@@ -851,8 +867,9 @@ def render_seasonal_trends(df: pd.DataFrame):
         ]
     )
 
-    # Area for range
-    area = base.mark_area(opacity=0.3, color="#F59E0B").encode(
+    # Area for range (using theme purple with transparency)
+    # 範圍面積圖（使用主題紫色加透明度）
+    area = base.mark_area(opacity=0.25, color="#A78BFA").encode(
         y=alt.Y("min:Q", title=""),
         y2="max:Q"
     )
@@ -868,6 +885,8 @@ def render_seasonal_trends(df: pd.DataFrame):
         color='#F6F7FF',
         fontSize=16,
         anchor='start'
+    ).configure_view(
+        strokeWidth=0
     )
 
     st.altair_chart(chart, use_container_width=True)
@@ -1006,7 +1025,7 @@ def main():
         metric_cols = st.columns(4)
 
         with metric_cols[0]:
-            render_metric("Locations", humanize(filtered["location_id"].nunique()), "Stations with PM2.5 data")
+            render_metric("Locations", humanize_int(filtered["location_id"].nunique()), "Stations with PM2.5 data")
 
         with metric_cols[1]:
             render_metric("Average PM2.5", humanize(filtered["value"].mean()), "Daily mean after filters")
@@ -1015,7 +1034,7 @@ def main():
             render_metric("Peak PM2.5", humanize(filtered["value"].max()), "Maximum recorded value")
 
         with metric_cols[3]:
-            render_metric("Rows", humanize(len(filtered)), "Daily measurements in view")
+            render_metric("Rows", humanize_int(len(filtered)), "Daily measurements in view")
 
         # Map (below the KEY METRICS row)
         st.markdown("<div class='section-label' style='margin-top:2rem;'>National Overview</div>", unsafe_allow_html=True)
