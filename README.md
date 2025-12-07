@@ -62,18 +62,19 @@ cd us-air-quality-pipeline
 
 1. **Create a Supabase project**
    - Go to https://supabase.com
+   - Register a new account
    - Click "New Project"
    - Choose a name, database password, and region
    - Wait for setup to complete (~2 minutes)
 
 2. **Get connection details**
-   - In your project dashboard, go to `Settings` → `Database`
+   - In your project dashboard, go to `Connect` → `Connection String` → `Method` (Choose `Session Pooler`)
    - Note down:
-     - **Host**: `db.xxxxxxxxxxxxx.supabase.co`
+     - **Host**: `db.xxxxxxxxxxxxx.supabase.com` # example: aws-0-us-west-2.pooler.supabase.com
      - **Port**: `5432`
      - **Database name**: `postgres`
      - **User**: `postgres`
-     - **Password**: Your database password
+     - **Password**: [Your database password] # the password you choose on supabase
 
 3. **Create the database table**
    - Go to `SQL Editor` in Supabase dashboard
@@ -92,12 +93,16 @@ OPENAQ_API_KEY=your_openaq_api_key_here
 OPENAQ_DEFAULT_START_DATE=2024-01-01T00:00:00Z
 
 # Supabase/PostgreSQL Configuration
-POSTGRES_HOST=db.xxxxxxxxxxxxx.supabase.co
+POSTGRES_HOST=db.xxxxxxxxxxxxx.supabase.com
 POSTGRES_PORT=5432
 POSTGRES_DB=postgres
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=your_database_password_here
 POSTGRES_SSLMODE=require
+
+# PgAdmin configuration
+PGADMIN_EMAIL=admin@airquality.com
+PGADMIN_PASSWORD=admin
 ```
 
 **How to get OpenAQ API Key:**
