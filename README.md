@@ -2,6 +2,9 @@
 
 End-to-end data pipeline that fetches PM2.5 air quality data from OpenAQ API, stores it in PostgreSQL (Supabase), and visualizes it through an interactive Streamlit dashboard.
 
+PM2.5 refers to **fine particulate matter**—tiny particles with diameter ≤ 2.5 micrometers that can penetrate deep into the lungs and bloodstream and are strongly linked to cardiovascular and respiratory problems. We focus on PM2.5 (instead of ozone or other pollutants) because it has well-documented health impacts, clear regulatory thresholds, and strong spatial variation across regions, making it a natural choice for a first version of this monitoring pipeline.
+
+
 ## 🏗️ Architecture
 
 ```
