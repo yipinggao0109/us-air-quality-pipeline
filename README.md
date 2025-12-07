@@ -368,17 +368,5 @@ us-air-quality-pipeline/
 
 - The pipeline only fetches **PM2.5** data (not PM10 or other parameters)
 - Duplicate data is automatically prevented by database unique constraint
-- Coordinates come from `openaq_us_locations_enriched.csv`, not from API
 - Date filtering happens at data fetch time for efficiency
 
-## 🤝 Contributing
-
-Feel free to open issues or submit pull requests!
-
-## 📄 License
-
-[Add your license here]
-
----
-
-**Built with**: Apache Airflow • PostgreSQL (Supabase) • Streamlit • OpenAQ API • Docker

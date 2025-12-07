@@ -32,31 +32,33 @@ client = OpenAQ(api_key=api_key)
 # Make sure the output directory exists (if you want to save CSV files)
 os.makedirs('fetched_data/sensor_data', exist_ok=True)
 
-# Read location IDs from states_codes.csv
-# These are representative monitoring station locations for the 50 US states
+# Read location IDs from state_city_codes.csv
+# These are monitoring station locations for major cities across all 50 US states
 # Each location may contain multiple sensors; we will filter for PM2.5 sensors
 import csv
 
-csv_path = os.path.join(os.path.dirname(__file__), '../frontend/sensor_locations/states_codes.csv')
+csv_path = os.path.join(os.path.dirname(__file__), '../frontend/sensor_locations/state_city_codes.csv')
 
 location_ids = []
 try:
-    with open(csv_path, 'r') as f:
+    with open(csv_path, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         for row in reader:
             if row.get('Code'):  # Ensure the Code field is not empty
                 try:
                     location_ids.append(int(row['Code']))
                 except ValueError:
+                    print(f"⚠️ Skipping invalid Code: {row.get('Code')}")
                     continue  # skip invalid values
 
-    print(f"✅ Successfully loaded {len(location_ids)} location IDs from states_codes.csv")
-    print(f"   Range: Alabama (Location {min(location_ids)}) to Wyoming (Location {max(location_ids)})")
+    print(f"✅ Successfully loaded {len(location_ids)} location IDs from state_city_codes.csv")
+    print(f"   Covering major cities across all 50 US states")
     print(f"   Will filter PM2.5 sensors from each location")
 except FileNotFoundError:
     print(f"⚠️  Could not find {csv_path}")
-    print("Using the default 50 state location IDs")
-    # Use all 50 state location IDs as predefined below
+    raise FileNotFoundError(f"Could not find {csv_path}")
+    print("Using the fallback 50 state location IDs (one per state)")
+    # Use fallback: one representative location per state
     location_ids = [
         1671,  # Alabama
         1404,  # Alaska

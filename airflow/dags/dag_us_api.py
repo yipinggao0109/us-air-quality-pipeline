@@ -91,12 +91,14 @@ def fetch_location_data(**context):
     2. Get all sensors from the location
     3. Filter PM2.5 sensors
     4. Fetch measurements from these PM2.5 sensors
+    5. Record sensor_id to location_id mapping
 
     Description:
     1. Read location IDs passed from the previous task through XCom
     2. For each location, get PM2.5 sensors
     3. For each PM2.5 sensor, fetch measurement data
-    4. Pass all collected data to the next task through XCom
+    4. Record the sensor-location mapping
+    5. Pass all collected data to the next task through XCom
     """
     # Read output from previous task via XCom
     location_ids = context["ti"].xcom_pull(key="location_ids") or []
@@ -105,6 +107,7 @@ def fetch_location_data(**context):
 
     client = get_openaq_client()
     measurement_rows = []  # Collected measurement data
+    sensor_to_location_map = {}  # Track sensor_id -> location_id mapping
 
     print(f"Fetching data for {len(location_ids)} locations...")
 
@@ -122,12 +125,17 @@ def fetch_location_data(**context):
             # For each PM2.5 sensor, fetch measurements
             for sensor in pm25_sensors:
                 try:
+                    sensor_id = sensor.id
+                    
+                    # Record the sensor_id to location_id mapping
+                    sensor_to_location_map[sensor_id] = location_id
+                    
                     # Get coordinates from sensor object (fallback)
                     sensor_coords = getattr(sensor, 'coordinates', None)
                     sensor_lat = getattr(sensor_coords, 'latitude', None) if sensor_coords else None
                     sensor_lon = getattr(sensor_coords, 'longitude', None) if sensor_coords else None
                     
-                    print(f"  Fetching sensor {sensor.id} ({sensor.name})...")
+                    print(f"  Fetching sensor {sensor_id} ({sensor.name})...")
                     df = fetch_sensor_measurements(
                         client=client,
                         sensor_id=sensor.id,
@@ -151,15 +159,20 @@ def fetch_location_data(**context):
         except Exception as exc:
             print(f"✗ Failed to process location {location_id}: {exc}")
             continue  # Continue with next location
-        else:
-            print(f"⚠ No new rows for sensor {sensor_id}")
+        except Exception as exc:
+            print(f"✗ Failed to process location {location_id}: {exc}")
+            continue  # Continue with next location
 
+    # Save sensor-location mapping to CSV
+    save_sensor_to_location_mapping(sensor_to_location_map)
+    
     # Save results to XCom for the next task
     context["ti"].xcom_push(key="fetched_data", value=measurement_rows)
 
     print(
-        f"Aggregated {len(measurement_rows)} PM2.5 measurement rows across {len(sensor_ids)} sensors"
+        f"Aggregated {len(measurement_rows)} PM2.5 measurement rows"
     )
+    print(f"Recorded {len(sensor_to_location_map)} sensor-location mappings")
 
 
 # ==========  TASK 5: WRITE SENSOR_DATA TABLE  ==========

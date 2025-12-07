@@ -396,6 +396,55 @@ def prepare_dataframe_for_db(df):
     return df_clean
 
 
+def save_sensor_to_location_mapping(sensor_to_location_map, output_path=None):
+    """
+    Save sensor_id to location_id mapping to a CSV file
+    
+    This mapping is crucial for the frontend to correctly map sensor data to location information
+    (state/city names) from state_city_codes.csv
+    
+    Parameters:
+    -----------
+    sensor_to_location_map : dict
+        Dictionary mapping sensor_id -> location_id
+    output_path : str, optional
+        Path to save the CSV file. If None, saves to src/frontend/sensor_locations/
+    
+    Returns:
+    --------
+    str
+        Path to the saved CSV file
+    """
+    if not sensor_to_location_map:
+        print("⚠️  No sensor-location mappings to save")
+        return None
+    
+    # Default output path: save to frontend/sensor_locations/
+    if output_path is None:
+        base_dir = Path(__file__).parent.parent.parent / 'frontend' / 'sensor_locations'
+        base_dir.mkdir(parents=True, exist_ok=True)
+        output_path = base_dir / 'sensor_to_location_mapping.csv'
+    else:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Convert mapping to DataFrame
+    mapping_df = pd.DataFrame([
+        {'sensor_id': sensor_id, 'location_id': location_id}
+        for sensor_id, location_id in sensor_to_location_map.items()
+    ])
+    
+    # Sort by sensor_id for readability
+    mapping_df = mapping_df.sort_values('sensor_id').reset_index(drop=True)
+    
+    # Save to CSV
+    mapping_df.to_csv(output_path, index=False)
+    
+    print(f"\n✅ Saved {len(mapping_df)} sensor-location mappings to: {output_path}")
+    
+    return str(output_path)
+
+
 def save_dataframe_to_db(df, table_name='sensor_data', if_exists='append'):
     """
     Save a pandas DataFrame to PostgreSQL (Supabase) using a single
@@ -483,6 +532,7 @@ def fetch_and_save_to_db(client, location_ids, datetime_from, datetime_to, table
     3. Filter for PM2.5 sensors
     4. For each PM2.5 sensor, fetch measurement data
     5. Save to the database
+    6. Record sensor_id to location_id mapping
 
     Parameters:
     -----------
@@ -509,6 +559,9 @@ def fetch_and_save_to_db(client, location_ids, datetime_from, datetime_to, table
     total_rows_inserted = 0
     total_duplicates = 0
     
+    # Dictionary to track sensor_id -> location_id mapping
+    sensor_to_location_map = {}
+    
     for idx, location_id in enumerate(location_ids, start=1):
         print(f"\n[{idx}/{len(location_ids)}] Location {location_id}")
         print("-" * 70)
@@ -525,6 +578,11 @@ def fetch_and_save_to_db(client, location_ids, datetime_from, datetime_to, table
             # Fetch data for each PM2.5 sensor
             for sensor in pm25_sensors:
                 try:
+                    sensor_id = sensor.id
+                    
+                    # Record the sensor_id to location_id mapping
+                    sensor_to_location_map[sensor_id] = location_id
+                    
                     df = fetch_sensor_measurements(
                         client=client,
                         sensor=sensor,
@@ -556,6 +614,9 @@ def fetch_and_save_to_db(client, location_ids, datetime_from, datetime_to, table
             print(f"  ✗ Error processing location {location_id}: {e}")
             skipped_locations += 1
     
+    # Save sensor-to-location mapping to CSV
+    save_sensor_to_location_mapping(sensor_to_location_map)
+    
     # Print summary
     print("\n" + "=" * 70)
     print("SUMMARY")
@@ -564,6 +625,7 @@ def fetch_and_save_to_db(client, location_ids, datetime_from, datetime_to, table
     print(f"Successful PM2.5 sensors: {successful_sensors}")
     print(f"Failed sensors: {failed_sensors}")
     print(f"Skipped locations: {skipped_locations}")
+    print(f"Sensor-Location mappings recorded: {len(sensor_to_location_map)}")
     print(f"Rows attempted: {total_rows_attempted}")
     print(f"Rows inserted: {total_rows_inserted}")
     print(f"Duplicates skipped: {total_duplicates}")
@@ -573,6 +635,7 @@ def fetch_and_save_to_db(client, location_ids, datetime_from, datetime_to, table
         'failed_sensors': failed_sensors,
         'skipped_locations': skipped_locations,
         'total_locations': len(location_ids),
+        'sensor_mappings': len(sensor_to_location_map),
         'total_rows_attempted': total_rows_attempted,
         'total_rows_inserted': total_rows_inserted,
         'total_duplicates': total_duplicates

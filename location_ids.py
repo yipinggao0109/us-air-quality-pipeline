@@ -1,5 +1,5 @@
-# 從 openaq_us_locations_enriched.csv 提取的 location_id
-# 這些 ID 對應美國的空氣品質監測站
+# location_ids extracted from openaq_us_locations_enriched.csv
+# These IDs correspond to air quality monitoring stations in the United States
 SENSOR_IDS = [
     64, 161, 162, 163, 164, 165, 166, 167, 168, 169,
     170, 171, 172, 173, 174, 175, 176, 177, 178, 179,

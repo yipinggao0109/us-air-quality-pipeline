@@ -403,22 +403,22 @@ def render_map(df: pd.DataFrame):
     return agg.sort_values("avg_pm25", ascending=False)
 
 
-def render_trend_chart(df: pd.DataFrame, selected_locations: list = None):
+def render_trend_chart(df: pd.DataFrame, selected_cities: list = None):
     """
-    Render a line chart showing PM2.5 trends over time for selected locations.
+    Render a line chart showing PM2.5 trends over time for selected cities.
 
     Functionality description: (What this function does):
     - render = render/display
     - trend_chart = trend chart
 
-    Purpose: Shows a line chart of PM2.5 values over time for selected stations, maximum 5 at a time for clarity.
+    Purpose: Shows a line chart of PM2.5 values over time for selected cities, maximum 5 at a time for clarity.
 
     Parameters:
     -----------
     df : pd.DataFrame
         Filtered measurements DataFrame
-    selected_locations : list
-        List of selected location names (maximum 5 shown)
+    selected_cities : list
+        List of selected city names (maximum 5 shown)
 
     Returns:
     --------
@@ -432,26 +432,26 @@ def render_trend_chart(df: pd.DataFrame, selected_locations: list = None):
     df_copy = df.copy()
     df_copy["value"] = pd.to_numeric(df_copy["value"], errors='coerce')
 
-    # If locations are selected, filter for them
-    if selected_locations and len(selected_locations) > 0:
-        trend_df = df_copy[df_copy["location_name"].isin(selected_locations)].copy()
-        # Limit to max 5 locations for readability
-        if len(selected_locations) > 5:
-            top_5_locations = selected_locations[:5]
-            trend_df = trend_df[trend_df["location_name"].isin(top_5_locations)]
-            st.warning(f"⚠️ Showing only the first 5 selected locations for clarity.")
+    # If cities are selected, filter for them
+    if selected_cities and len(selected_cities) > 0:
+        trend_df = df_copy[df_copy["city"].isin(selected_cities)].copy()
+        # Limit to max 5 cities for readability
+        if len(selected_cities) > 5:
+            top_5_cities = selected_cities[:5]
+            trend_df = trend_df[trend_df["city"].isin(top_5_cities)]
+            st.warning(f"⚠️ Showing only the first 5 selected cities for clarity.")
     else:
-        # If no locations selected, show top 5 by average PM2.5
-        location_avg = df_copy.groupby("location_name")["value"].mean().sort_values(ascending=False)
-        top_5_locations = location_avg.head(5).index.tolist()
-        trend_df = df_copy[df_copy["location_name"].isin(top_5_locations)].copy()
-        st.info("💡 Showing top 5 locations by average PM2.5. Use the location filter to select specific sites.")
+        # If no cities selected, show top 5 by average PM2.5
+        city_avg = df_copy.groupby("city")["value"].mean().sort_values(ascending=False)
+        top_5_cities = city_avg.head(5).index.tolist()
+        trend_df = df_copy[df_copy["city"].isin(top_5_cities)].copy()
+        st.info("💡 Showing top 5 cities by average PM2.5. Use the city filter to select specific locations.")
 
     if trend_df.empty:
-        st.info("No data available for the selected locations.")
+        st.info("No data available for the selected cities.")
         return
 
-    # Aggregate by date and location
+    # Aggregate by date and location_name (City, State format)
     daily_trends = (
         trend_df.groupby(["date", "location_name"])
         .agg({"value": "mean"})
@@ -997,12 +997,26 @@ def main():
             start_date = default_start
             end_date = default_end
 
-        location_options = sensor_meta["location_name"].unique().tolist() if not sensor_meta.empty else []
-        selected_locations = st.multiselect(
-            "Locations (optional)",
-            location_options,
+        # State filter
+        state_options = sorted(measurements["state"].unique().tolist()) if not measurements.empty else []
+        selected_states = st.multiselect(
+            "States (optional)",
+            state_options,
             default=[],
-            key="location_filter",
+            key="state_filter",
+        )
+        
+        # City filter (filtered by selected states if any)
+        if selected_states:
+            available_cities = measurements[measurements["state"].isin(selected_states)]["city"].unique().tolist()
+        else:
+            available_cities = measurements["city"].unique().tolist() if not measurements.empty else []
+        
+        selected_cities = st.multiselect(
+            "Cities (optional)",
+            sorted(available_cities),
+            default=[],
+            key="city_filter",
         )
 
     # Apply filters
@@ -1013,8 +1027,16 @@ def main():
         date_series = pd.to_datetime(filtered["date"]).dt.date
         mask = (date_series >= start_date) & (date_series <= end_date)
         filtered = filtered[mask]
-    if selected_locations:
-        filtered = filtered[filtered["location_name"].isin(selected_locations)]
+    
+    # Apply state filter
+    if selected_states:
+        filtered = filtered[filtered["state"].isin(selected_states)]
+    
+    # Apply city filter
+    if selected_cities:
+        filtered = filtered[filtered["city"].isin(selected_cities)]
+    
+    # Apply scenario threshold filter
     if scenario_threshold is not None:
         filtered = filtered[filtered["value"] >= scenario_threshold]
 
@@ -1053,7 +1075,8 @@ def main():
         # Trend Chart
         # Show daily PM2.5 trends over time at selected locations
         st.markdown("<div class='section-label' style='margin-top:2rem;'>Daily PM2.5 Trends</div>", unsafe_allow_html=True)
-        render_trend_chart(filtered, selected_locations)
+        # Pass selected cities instead of selected locations
+        render_trend_chart(filtered, selected_cities if selected_cities else None)
 
         # AQI Distribution
         # Pie chart breaking down measurements by air quality levels

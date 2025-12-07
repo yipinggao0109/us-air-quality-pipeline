@@ -51,15 +51,62 @@ def load_location_coordinates():
 # Global variable: Load coordinates mapping table only once
 LOCATION_COORDS = load_location_coordinates()
 
-# Read the location IDs of the 50 US states from states_codes.csv
-# These IDs correspond to a representative monitoring station in each state
+# Read the location IDs from state_city_codes.csv
+# These IDs correspond to monitoring stations in major cities across all 50 US states
 # Each location can have multiple sensors; we'll filter for PM2.5 sensors
 import csv
 from pathlib import Path
 
-# Use fallback list due to Docker container path structure
-# This is more reliable and avoids path problems
-DEFAULT_LOCATION_IDS = [
+# Function to load location IDs from state_city_codes.csv
+def load_state_city_location_ids():
+    """
+    Load location IDs from state_city_codes.csv
+    
+    This CSV file contains location codes for major cities in all 50 US states.
+    Each row has: State, Code (location_id), City
+    
+    Returns:
+    --------
+    List[int]: List of location IDs (138 cities across 50 states)
+    """
+    # Try multiple possible paths (for different environments)
+    possible_paths = [
+        Path('/opt/airflow/src/frontend/sensor_locations/state_city_codes.csv'),
+        Path(__file__).parent.parent.parent.parent / 'src' / 'frontend' / 'sensor_locations' / 'state_city_codes.csv',
+    ]
+    
+    csv_path = None
+    for path in possible_paths:
+        if path.exists():
+            csv_path = path
+            break
+    
+    if not csv_path:
+        print(f"⚠️ Warning: Could not find state_city_codes.csv, using fallback list")
+        return FALLBACK_LOCATION_IDS
+    
+    try:
+        location_ids = []
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get('Code'):  # Ensure Code field is not empty
+                    try:
+                        location_ids.append(int(row['Code']))
+                    except ValueError:
+                        print(f"⚠️ Skipping invalid Code: {row.get('Code')}")
+                        continue
+        
+        print(f"✅ Airflow: Successfully loaded {len(location_ids)} location IDs from state_city_codes.csv")
+        return location_ids
+    
+    except Exception as e:
+        print(f"⚠️ Airflow: Error loading state_city_codes.csv: {e}")
+        return FALLBACK_LOCATION_IDS
+
+# Fallback list in case CSV file cannot be loaded
+# This is a minimal set of representative locations (one per state)
+FALLBACK_LOCATION_IDS = [
     1671, 1404, 564, 2045, 8830, 2183, 2151, 1149, 1560, 1951,  # Alabama - Georgia
     2090, 1398, 8864, 314, 1619, 1155, 1897, 1754, 1448, 1142,  # Hawaii - Maryland
     452, 7003, 1772, 326, 1626, 512, 3837, 1634, 1028, 962,     # Massachusetts - New Jersey
@@ -67,7 +114,8 @@ DEFAULT_LOCATION_IDS = [
     1037, 289, 1316, 288, 1590, 1615, 1275, 1650, 1601, 9510    # South Dakota - Wyoming
 ]
 
-print(f"✅ Airflow: Using 50 state location IDs (extracted from states_codes.csv)")
+# Load location IDs from CSV at module import time
+DEFAULT_LOCATION_IDS = load_state_city_location_ids()
 
 # Set the default start date to 2024/01/01
 DEFAULT_START_DATE = "2024-01-01T00:00:00Z"
@@ -105,7 +153,7 @@ def get_location_ids() -> List[int]:
 
     Priority:
     1. From the environment variable OPENAQ_LOCATION_IDS
-    2. If not set, use DEFAULT_LOCATION_IDS (50 representative locations from states_codes.csv)
+    2. If not set, use DEFAULT_LOCATION_IDS (138 major cities from state_city_codes.csv)
 
     Returns:
     --------
@@ -597,6 +645,56 @@ def update_signal_table(engine, latest_per_sensor: Dict[int, str]) -> None:
 
     with engine.begin() as conn:
         conn.execute(sql, payload)
+
+
+def save_sensor_to_location_mapping(sensor_to_location_map) -> None:
+    """
+    Save sensor_id to location_id mapping to a CSV file
+    
+    This mapping is crucial for the frontend to correctly map sensor data to location information.
+    
+    Parameters:
+    -----------
+    sensor_to_location_map : dict
+        Dictionary mapping sensor_id -> location_id
+    """
+    if not sensor_to_location_map:
+        print("⚠️  No sensor-location mappings to save")
+        return
+    
+    # Try multiple possible paths (for different environments)
+    possible_paths = [
+        Path('/opt/airflow/src/frontend/sensor_locations/sensor_to_location_mapping.csv'),
+        Path(__file__).parent.parent.parent.parent / 'src' / 'frontend' / 'sensor_locations' / 'sensor_to_location_mapping.csv',
+    ]
+    
+    output_path = None
+    for path in possible_paths:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            output_path = path
+            break
+        except Exception:
+            continue
+    
+    if output_path is None:
+        print("⚠️  Could not find suitable path to save sensor-location mapping")
+        return
+    
+    # Convert mapping to DataFrame
+    mapping_data = [
+        {'sensor_id': sensor_id, 'location_id': location_id}
+        for sensor_id, location_id in sensor_to_location_map.items()
+    ]
+    mapping_df = pd.DataFrame(mapping_data)
+    
+    # Sort by sensor_id for readability
+    mapping_df = mapping_df.sort_values('sensor_id').reset_index(drop=True)
+    
+    # Save to CSV
+    mapping_df.to_csv(output_path, index=False)
+    
+    print(f"\n✅ Saved {len(mapping_df)} sensor-location mappings to: {output_path}")
 
 
 def utcnow_iso() -> str:

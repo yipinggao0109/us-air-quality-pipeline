@@ -1,14 +1,14 @@
 {
   "Servers": {
     "1": {
-      "Name": "Supabase AirQuality - New (Session Pooler)",
+      "Name": "Supabase AirQuality",
       "Group": "Servers",
       "Host": "aws-0-us-west-2.pooler.supabase.com",
       "Port": 5432,
       "MaintenanceDB": "postgres",
       "Username": "postgres.lbshgwgpmlwjoxdczoxg",
       "SSLMode": "require",
-      "Comment": "Session Pooler connection for IPv4 compatibility"
+      "Comment": "Supabase PostgreSQL Database"
     }
   }
 }
