@@ -1,0 +1,50 @@
+# Dockerfile.streamlit
+# 這個 Dockerfile 用於建立 Streamlit frontend 的 Docker image
+
+# 使用官方的 Python image 作為基礎
+FROM python:3.11-slim
+
+# 設定工作目錄
+WORKDIR /app
+
+# 安裝系統相依套件
+# 這些套件是 psycopg2（PostgreSQL 驅動）所需要的
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    postgresql-client \
+    libpq-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 複製 requirements.txt 到容器中
+COPY requirements.txt /app/requirements.txt
+
+# 安裝 Python 套件
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 複製 frontend 程式碼到容器中
+COPY src/frontend /app
+
+# 暴露 Streamlit 預設的 8501 port
+EXPOSE 8501
+
+# 設定環境變數
+# PYTHONUNBUFFERED=1 確保 Python 輸出不會被緩衝，方便看 logs
+ENV PYTHONUNBUFFERED=1
+
+# 啟動 Streamlit
+# --server.port=8501 指定 port
+# --server.address=0.0.0.0 讓外部可以存取
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+
+# 說明:
+# - FROM: 使用 Python 3.11 的精簡版 image
+# - WORKDIR: 設定 /app 為工作目錄
+# - RUN apt-get: 安裝編譯 psycopg2 所需的系統套件
+# - RUN pip install: 安裝 Python 套件
+# - COPY: 複製 frontend 程式碼到容器
+# - EXPOSE: 宣告容器會使用 8501 port
+# - ENV: 設定環境變數
+# - CMD: 容器啟動時執行的命令
+
